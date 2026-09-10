@@ -18,8 +18,8 @@ from mts.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
     did_timeout,
-    project_allows_conclude_fallback,
     preview,
+    project_allows_conclude_fallback,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
@@ -56,7 +56,9 @@ def run_bootstrap_task(
         )
         return "failed"
 
-    lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
+    lease = HeartbeatLease.for_intent(
+        client, project.project.id, intent.id, worker.name, config.runtime.interval
+    )
     lease.start()
     try:
         workdir = backend.ensure_running(project.project.id)
@@ -120,6 +122,9 @@ def run_bootstrap_task(
             timeout_seconds=config.tasks.bootstrap.timeout,
             lease=lease,
             cancellation=cancellation,
+            project_id=project.project.id,
+            session=session,
+            intent_id=intent.id,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
@@ -237,7 +242,12 @@ def run_bootstrap_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     except Exception:
-        LOG.exception("bootstrap task crashed project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+        LOG.exception(
+            "bootstrap task crashed project=%s intent=%s worker=%s",
+            project.project.id,
+            intent.id,
+            worker.name,
+        )
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     finally:
@@ -304,7 +314,12 @@ def _try_conclude_fallback(
         _bootstrap_prompt_replacements(project, workdir),
     )
     conclude_argv = driver.build_conclude(worker, prompt, session)
-    LOG.info("starting bootstrap conclude fallback project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
+    LOG.info(
+        "starting bootstrap conclude fallback project=%s intent=%s worker=%s",
+        project.project.id,
+        intent.id,
+        worker.name,
+    )
     conclude_started = time.perf_counter()
     result = run_worker_process(
         backend,
@@ -315,6 +330,9 @@ def _try_conclude_fallback(
         timeout_seconds=config.tasks.bootstrap.conclude_timeout,
         lease=lease,
         cancellation=cancellation,
+        project_id=project.project.id,
+        session=session,
+        intent_id=intent.id,
     )
     conclude_ms = int((time.perf_counter() - conclude_started) * 1000)
     cancelled = cancel_reason(result, cancellation)
@@ -349,8 +367,12 @@ def _try_conclude_fallback(
     try:
         model_output = driver.extract_response_text(result.stdout, result.stderr)
         payload = parse_json_output(model_output)
-        conclude_data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-        if isinstance(conclude_data, dict) and isinstance(conclude_data.get("complete"), dict):
+        conclude_data = (
+            payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        )
+        if isinstance(conclude_data, dict) and isinstance(
+            conclude_data.get("complete"), dict
+        ):
             LOG.warning(
                 "bootstrap conclude returned unexpected complete payload project=%s intent=%s worker=%s complete_preview=%s",
                 project.project.id,
@@ -394,7 +416,9 @@ def _try_conclude_fallback(
     )
 
 
-def _bootstrap_prompt_replacements(project: ProjectDetail, workdir: str) -> dict[str, str]:
+def _bootstrap_prompt_replacements(
+    project: ProjectDetail, workdir: str
+) -> dict[str, str]:
     facts = {fact.id: fact.description for fact in project.facts}
     hints = [
         {
@@ -449,7 +473,9 @@ def _write_bootstrap_complete_result(
         )
         return "success"
 
-    response = client.complete(project_id, [conclude.fact_id], complete_description, worker_name)
+    response = client.complete(
+        project_id, [conclude.fact_id], complete_description, worker_name
+    )
     if response.status_code in (403, 409):
         LOG.info(
             "bootstrap complete deferred project=%s intent=%s worker=%s source=%s status=%s fact_id=%s",

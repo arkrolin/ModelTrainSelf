@@ -28,6 +28,8 @@ function mtsApp() {
     searchRunning: false,
     dispatchLog: '',
     searchProviderId: '',         // '' = 宿主机环境变量
+    agentActivity: [],            // agent 活动流
+    activitySeq: 0,               // 已读到的最大 seq
 
     // ===== 图表 =====
     progressChart: null,
@@ -88,6 +90,7 @@ function mtsApp() {
         await this.loadGraph();
         await this.loadSearchStatus();
         if (this.searchRunning && this.sideTab === 'log') this.loadLogs();
+        if (this.searchRunning && this.sideTab === 'activity') this.loadActivity();
       }
     },
 
@@ -463,6 +466,26 @@ function mtsApp() {
         this.dispatchLog = data?.output || '(无日志)';
       } catch (_) {
         this.dispatchLog = '(日志加载失败)';
+      }
+    },
+
+    async loadActivity() {
+      if (!this.currentProject) return;
+      try {
+        const data = await this.api(
+          `/api/projects/${this.currentProject.id}/activity?after_seq=${this.activitySeq}&limit=200`,
+          { silent: true }
+        );
+        if (data?.events && data.events.length > 0) {
+          this.agentActivity.push(...data.events);
+          // 保留最新 400 条，与后端 RING_SIZE 对齐
+          if (this.agentActivity.length > 400) {
+            this.agentActivity = this.agentActivity.slice(-400);
+          }
+          this.activitySeq = data.latest_seq || this.activitySeq;
+        }
+      } catch (_) {
+        // 静默失败，不干扰主流程
       }
     },
 

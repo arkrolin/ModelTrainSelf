@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from dataclasses import dataclass
 
 from mts.dispatcher.config import DispatchConfig, WorkerConfig
 from mts.dispatcher.contracts import ExploreOutcome
 from mts.dispatcher.protocol.client import MTSClient
+from mts.dispatcher.runtime.activity import ActivityWatcher
 from mts.dispatcher.runtime.cancellation import TaskCancellation
 from mts.dispatcher.runtime.heartbeat import HeartbeatLease
 from mts.dispatcher.runtime.local_backend import LocalBackend
@@ -32,10 +32,14 @@ def preview(text: str, limit: int = LOG_PREVIEW_LIMIT) -> str:
 
 
 def did_timeout(result: ProcessResult) -> bool:
-    return not result.cancelled and (result.timed_out or result.returncode in (124, 137))
+    return not result.cancelled and (
+        result.timed_out or result.returncode in (124, 137)
+    )
 
 
-def cancel_reason(result: ProcessResult, cancellation: TaskCancellation | None = None) -> str | None:
+def cancel_reason(
+    result: ProcessResult, cancellation: TaskCancellation | None = None
+) -> str | None:
     if result.cancelled:
         return result.cancel_reason or "cancelled"
     if cancellation is not None:
@@ -43,7 +47,9 @@ def cancel_reason(result: ProcessResult, cancellation: TaskCancellation | None =
     return None
 
 
-def communicate_timeout(timeout_seconds: int, grace_seconds: int = PROCESS_COMMUNICATE_GRACE_SECONDS) -> int:
+def communicate_timeout(
+    timeout_seconds: int, grace_seconds: int = PROCESS_COMMUNICATE_GRACE_SECONDS
+) -> int:
     return timeout_seconds + grace_seconds
 
 
@@ -88,6 +94,9 @@ def run_worker_process(
     timeout_seconds: int,
     lease: HeartbeatLease | None = None,
     cancellation: TaskCancellation | None = None,
+    project_id: str | None = None,
+    session: str | None = None,
+    intent_id: str | None = None,
 ) -> ProcessResult:
     LOG.info(
         "starting worker process workdir=%s worker=%s phase=%s timeout=%ss",
@@ -115,16 +124,36 @@ def run_worker_process(
         lease.attach_process(process)
     if cancellation is not None:
         cancellation.attach_process(process)
+    # 旁路观测：读 CLI 自己写的 session transcript，把 agent 的动作喂给 WebUI。
+    # 没有 session（mock driver）时 watcher 自动空转。
+    watcher = (
+        ActivityWatcher(
+            session,
+            project_id=project_id or "",
+            worker=worker.name,
+            phase=phase,
+            intent_id=intent_id,
+            workdir=workdir,
+        )
+        if project_id
+        else None
+    )
     try:
+        if watcher is not None:
+            watcher.start()
         return process.communicate(timeout=communicate_timeout(timeout_seconds))
     finally:
+        if watcher is not None:
+            watcher.stop()
         if lease is not None:
             lease.attach_process(None)
         if cancellation is not None:
             cancellation.attach_process(None)
 
 
-def project_allows_conclude_fallback(client: MTSClient, project_id: str, *, worker_name: str, intent_id: str) -> bool:
+def project_allows_conclude_fallback(
+    client: MTSClient, project_id: str, *, worker_name: str, intent_id: str
+) -> bool:
     project = client.get_project(project_id)
     if project.project.status == "active":
         return True
@@ -138,7 +167,9 @@ def project_allows_conclude_fallback(client: MTSClient, project_id: str, *, work
     return False
 
 
-def best_effort_release_reason(client: MTSClient, project_id: str, worker_name: str) -> None:
+def best_effort_release_reason(
+    client: MTSClient, project_id: str, worker_name: str
+) -> None:
     response = client.release_reason(project_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
@@ -250,7 +281,9 @@ def write_conclude_result_with_fact_id(
     return ConcludeWriteResult(status="failed", fact_id=None)
 
 
-def best_effort_release(client: MTSClient, project_id: str, intent_id: str, worker_name: str) -> None:
+def best_effort_release(
+    client: MTSClient, project_id: str, intent_id: str, worker_name: str
+) -> None:
     response = client.release(project_id, intent_id, worker_name)
     if not response.ok and response.status_code not in (403, 409):
         LOG.warning(
@@ -261,7 +294,12 @@ def best_effort_release(client: MTSClient, project_id: str, intent_id: str, work
             response.status_code,
         )
     elif response.ok:
-        LOG.info("released intent project=%s intent=%s worker=%s", project_id, intent_id, worker_name)
+        LOG.info(
+            "released intent project=%s intent=%s worker=%s",
+            project_id,
+            intent_id,
+            worker_name,
+        )
     else:
         LOG.info(
             "release skipped project=%s intent=%s worker=%s status=%s",

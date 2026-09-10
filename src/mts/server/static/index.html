@@ -421,6 +421,10 @@
           :class="sideTab === 'timeline' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
           时间线
         </button>
+        <button @click="sideTab = 'activity'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+          :class="sideTab === 'activity' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
+          Agent
+        </button>
         <button @click="sideTab = 'log'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'log' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
           日志
@@ -621,6 +625,45 @@
               </div>
             </div>
           </template>
+        </div>
+
+        <!-- Agent 活动流：正在做什么 -->
+        <div x-show="sideTab === 'activity'" class="flex flex-col h-full">
+          <div class="px-4 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
+            <p class="text-xs text-slate-500 flex-1">Agent 实时活动</p>
+            <button @click="loadActivity()" class="text-xs text-indigo-600 hover:text-indigo-800">刷新</button>
+          </div>
+          <template x-if="agentActivity.length === 0">
+            <div class="px-4 py-8 text-center">
+              <p class="text-sm text-slate-400">暂无活动</p>
+              <p class="text-xs text-slate-300 mt-1">Agent 工作时这里会显示工具调用和输出</p>
+            </div>
+          </template>
+          <div x-show="agentActivity.length > 0" class="flex-1 overflow-auto p-3 space-y-1.5">
+            <template x-for="ev in agentActivity.slice().reverse()" :key="ev.seq">
+              <div class="text-xs border-l-2 pl-2 py-1"
+                :class="{
+                  'border-blue-400 bg-blue-50/50': ev.kind === 'tool',
+                  'border-green-400 bg-green-50/50': ev.kind === 'tool_result',
+                  'border-slate-300 bg-slate-50/50': ev.kind === 'text',
+                  'border-purple-300 bg-purple-50/50': ev.kind === 'thinking',
+                  'border-red-400 bg-red-50/50': ev.kind === 'error'
+                }">
+                <div class="flex items-baseline gap-2 text-[10px] text-slate-400 mb-0.5">
+                  <span x-text="new Date(ev.at).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'})"></span>
+                  <span x-text="ev.phase"></span>
+                  <span class="font-mono" x-text="ev.worker"></span>
+                </div>
+                <div class="text-slate-700 leading-relaxed" x-text="ev.summary"></div>
+                <template x-if="ev.detail">
+                  <details class="mt-1">
+                    <summary class="text-[10px] text-slate-400 cursor-pointer hover:text-slate-600">详情</summary>
+                    <pre class="mt-1 text-[10px] text-slate-600 whitespace-pre-wrap font-mono bg-white/60 p-1.5 rounded" x-text="ev.detail"></pre>
+                  </details>
+                </template>
+              </div>
+            </template>
+          </div>
         </div>
 
         <!-- 日志：dispatcher 环形缓冲 -->
