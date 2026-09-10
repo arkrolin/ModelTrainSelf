@@ -1,0 +1,47 @@
+name: roberta-random-clf-baseline
+backend: torch
+device: cuda
+precision: fp32
+
+budget:
+  max_steps: 500
+  checkpoint_every: 100
+  eval_every: 50
+
+data:
+  dataset: custom
+  train_path: data/random_clf_10k/train.jsonl
+  val_path: data/random_clf_10k/val.jsonl
+  batch_size: 32
+  seq_len: 128
+  num_workers: 2
+
+arch:
+  kind: roberta
+  pretrained: models/RoBERTa_zh_L12_PyTorch
+  n_layer: 12
+  d_model: 768
+  n_head: 12
+  d_ff: 3072
+  dropout: 0.1
+  attn_dropout: 0.1
+  activation: gelu
+  norm_type: layernorm
+  norm_position: pre
+  num_labels: 2
+  freeze_encoder: false
+
+optim:
+  kind: adamw
+  lr: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  grad_clip: 1.0
+  schedule:
+    kind: linear
+    warmup_steps: 50
+    min_lr_ratio: 0.0
+
+seed: 42
+notes: "RoBERTa-base-zh 随机二分类任务基线，10k样本，特征完全随机"

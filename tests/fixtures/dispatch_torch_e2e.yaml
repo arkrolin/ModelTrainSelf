@@ -1,0 +1,55 @@
+# Dispatch config for real PyTorch E2E test: credentials from host environment.
+#
+# SECURITY: API keys MUST NOT appear in this file. The worker env merges host
+# os.environ first, then this YAML's env dict:
+#   merged_env = {**os.environ, **(env or {})}  # local_backend.py:49
+# and llm_call.py reads LLM_API_KEY from os.environ, so the host shell exports
+# it once and every worker inherits it. WorkerConfig.validate_env only checks
+# that *present* keys are non-empty — so omitting the key here is correct.
+
+server:
+  host: 127.0.0.1
+  port: 17831
+
+workers:
+  - name: torch_worker_1
+    driver: mock
+    max_concurrent: 1
+    enabled: true
+    timeout: 90
+    env:
+      # Model and base URL from host environment; key NEVER in this file.
+      LLM_MODEL: claude-sonnet-4-5
+      # Mock phase configs: bootstrap seeds a fact, reason proposes 1 intent,
+      # explore always succeeds. Delays kept short for test speed.
+      MOCK_BOOTSTRAP: '{"outcomes": {"fact": 0.9, "skip": 0.1}, "delay": [0.1, 0.2], "rules": []}'
+      MOCK_REASON: '{"outcomes": {"intents": 0.95, "complete": 0.05}, "delay": [0.1, 0.2], "max_intents": 1, "rules": []}'
+      MOCK_EXPLORE: '{"outcomes": {"fact": 1.0}, "delay": [0.1, 0.2], "rules": []}'
+
+  - name: torch_worker_2
+    driver: mock
+    max_concurrent: 1
+    enabled: true
+    timeout: 90
+    env:
+      LLM_MODEL: claude-sonnet-4-5
+      MOCK_BOOTSTRAP: '{"outcomes": {"fact": 0.9, "skip": 0.1}, "delay": [0.1, 0.2], "rules": []}'
+      MOCK_REASON: '{"outcomes": {"intents": 0.95, "complete": 0.05}, "delay": [0.1, 0.2], "max_intents": 1, "rules": []}'
+      MOCK_EXPLORE: '{"outcomes": {"fact": 1.0}, "delay": [0.1, 0.2], "rules": []}'
+
+dispatch:
+  interval: 0.5
+  max_project_workers: 2
+  reason:
+    timeout: 60
+    max_intents: 2
+
+logging:
+  version: 1
+  formatters:
+    simple: {format: '%(levelname)s [%(name)s] %(message)s'}
+  handlers:
+    console: {class: logging.StreamHandler, formatter: simple, stream: ext://sys.stderr}
+  root: {level: INFO, handlers: [console]}
+  loggers:
+    mts.dispatcher: {level: DEBUG}

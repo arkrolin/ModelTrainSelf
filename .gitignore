@@ -1,0 +1,47 @@
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime state
+data/
+workspace/
+runs/
+*.db
+*.db-wal
+*.db-shm
+
+# Local (git-ignored) configuration with secrets
+config/dispatch.yaml
+!config/dispatch.example.yaml
+!config/dispatch.local.example.yaml
+!config/dispatch_mock.yaml
+.env
+
+# Artifacts produced by trials
+*.pt
+*.pth
+*.safetensors
+artifacts/
+
+# Knowledge space keeps everything: do NOT ignore memory/.
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+REFACTOR_SUMMARY.md
+
+TESTING_GUIDE.md
+
+docs/
+
+FRONTEND_ENHANCEMENTS.md
+FRONTEND_REFACTOR_V2.md
+FRONTEND_V2_COMPLETE_GUIDE.md
+
+p1/

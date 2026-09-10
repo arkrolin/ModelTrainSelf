@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ModelTrainSelf · 自主训练搜索</title>
+<script src="/static/vendor/tailwindcss.js"></script>
+<script src="/static/vendor/echarts.min.js"></script>
+<!-- 搜索图谱：cytoscape + 分层布局引擎（DAG 流程图，与 Cairn 一致） -->
+<script src="/static/vendor/dagre.min.js"></script>
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/vendor/cytoscape-dagre.js"></script>
+<script src="/static/vendor/klay.js"></script>
+<script src="/static/vendor/cytoscape-klay.js"></script>
+<script src="/static/vendor/elk.bundled.js"></script>
+<script src="/static/vendor/cytoscape-elk.js"></script>
+<script defer src="/static/vendor/alpine.min.js"></script>
+<style>
+  [x-cloak] { display: none !important; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  .running-pulse { animation: runPulse 1.8s ease-in-out infinite; }
+  @keyframes runPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+</style>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['-apple-system','BlinkMacSystemFont','PingFang SC','Microsoft YaHei','sans-serif'],
+          mono: ['Consolas','Monaco','monospace']
+        }
+      }
+    }
+  }
+</script>
+</head>
+<body class="bg-slate-50 text-slate-800 h-screen flex flex-col overflow-hidden" x-data="mtsApp()" x-init="init()">
+
+<!-- ═══════════ 项目列表 ═══════════ -->
+<div x-show="view === 'list'" x-cloak class="flex-1 flex flex-col overflow-hidden">
+  <header class="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3 shrink-0">
+    <div class="flex items-center gap-2.5">
+      <div class="h-9 w-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+        MTS
+      </div>
+      <div>
+        <h1 class="font-bold text-slate-800 leading-tight">ModelTrainSelf</h1>
+        <p class="text-xs text-slate-500">自主训练搜索</p>
+      </div>
+    </div>
+    <div class="flex-1"></div>
+    <div class="flex items-center gap-3 text-xs text-slate-500">
+      <span class="flex items-center gap-1.5">
+        <span class="h-2 w-2 rounded-full bg-teal-500"></span>
+        <span x-text="countProjectsByStatus('active')"></span> 活跃
+      </span>
+      <span class="flex items-center gap-1.5">
+        <span class="h-2 w-2 rounded-full bg-slate-400"></span>
+        <span x-text="countProjectsByStatus('completed')"></span> 完成
+      </span>
+    </div>
+    <button @click="openSettings()"
+      class="px-3 py-2 border border-slate-300 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition flex items-center gap-2"
+      title="配置 LLM API 端点与密钥">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H2a2 2 0 110-4h.09A1.65 1.65 0 004.6 8a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 3.6 1.65 1.65 0 0010 2.09V2a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9c.14.36.44.65.82.79H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+      </svg>
+      设置
+      <span x-show="providers.length" class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px]"
+        x-text="providers.length"></span>
+    </button>
+    <button @click="showNewProject = true"
+      class="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition flex items-center gap-2">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+      新建项目
+    </button>
+  </header>
+
+  <div class="flex-1 overflow-y-auto p-5">
+    <template x-if="!projects.length">
+      <div class="max-w-md mx-auto mt-20 text-center">
+        <div class="text-slate-300 mb-3">
+          <svg class="w-12 h-12 mx-auto" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+          </svg>
+        </div>
+        <p class="text-sm text-slate-500">还没有项目</p>
+        <p class="text-xs text-slate-400 mt-1">新建一个项目，让 Agent 自主探索训练配置</p>
+      </div>
+    </template>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <template x-for="proj in projects" :key="proj.id">
+        <div class="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md hover:border-slate-300 transition cursor-pointer"
+          @click="openProject(proj.id)">
+          <div class="flex items-start gap-2 mb-3">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] font-mono text-slate-400" x-text="proj.id"></span>
+                <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide"
+                  :class="statusBadgeClass(proj.status)" x-text="proj.status"></span>
+                <span x-show="proj.reason" class="px-1.5 py-0.5 rounded bg-violet-50 text-violet-600 text-[9px] font-medium running-pulse">
+                  reasoning
+                </span>
+              </div>
+              <h3 class="font-semibold text-slate-800 truncate mt-0.5" x-text="proj.title"></h3>
+            </div>
+          </div>
+
+          <p class="text-xs text-slate-500 line-clamp-2 mb-3" x-text="proj.goal"></p>
+
+          <div class="flex items-center gap-3 text-xs text-slate-500 mb-3">
+            <span><span class="font-semibold text-slate-700" x-text="proj.fact_count || 0"></span> facts</span>
+            <span><span class="font-semibold text-slate-700" x-text="proj.intent_count || 0"></span> intents</span>
+            <span x-show="proj.working_intent_count"
+              class="text-indigo-600 running-pulse">
+              <span class="font-semibold" x-text="proj.working_intent_count"></span> 进行中
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2 text-xs mb-3">
+            <span class="text-slate-400">进度</span>
+            <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div class="h-full bg-indigo-500 rounded-full transition-all"
+                :style="`width: ${budgetPercent(proj)}%`"></div>
+            </div>
+            <span class="font-mono text-slate-500"
+              x-text="`${proj.trial_count || 0}/${proj.budget_max_trials}`"></span>
+          </div>
+
+          <div class="flex items-center gap-2 pt-3 border-t border-slate-100">
+            <span class="text-xs text-slate-400 font-mono" x-text="proj.goal_metric"></span>
+            <span x-show="proj.best_metric !== null && proj.best_metric !== undefined"
+              class="text-xs font-mono font-semibold text-teal-600"
+              x-text="formatMetric(proj.best_metric)"></span>
+            <div class="flex-1"></div>
+            <button @click.stop="toggleProjectStatus(proj.id, proj.status)"
+              class="px-2 py-1 text-xs border border-slate-200 text-slate-600 rounded hover:bg-slate-50 transition"
+              x-text="proj.status === 'active' ? '停止' : '启动'"></button>
+            <button @click.stop="deleteProject(proj.id, proj.title)"
+              class="px-2 py-1 text-xs border border-red-200 text-red-500 rounded hover:bg-red-50 transition">
+              删除
+            </button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 项目详情 ═══════════ -->
+<div x-show="view === 'detail' && currentProject" x-cloak class="flex-1 flex flex-col overflow-hidden">
+  <header class="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center gap-3 shrink-0">
+    <button @click="backToList()"
+      class="p-1.5 rounded-lg hover:bg-slate-100 transition text-slate-400 hover:text-slate-600">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M15 19l-7-7 7-7"/>
+      </svg>
+    </button>
+    <div class="flex items-center gap-2 min-w-0">
+      <span class="text-[11px] font-mono text-slate-400" x-text="currentProject?.id"></span>
+      <h2 class="text-[15px] font-semibold text-slate-700 truncate" x-text="currentProject?.title"></h2>
+      <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide shrink-0"
+        :class="statusBadgeClass(currentProject?.status)" x-text="currentProject?.status"></span>
+    </div>
+    <div class="flex-1"></div>
+
+    <div class="flex items-center gap-3 text-xs text-slate-500">
+      <span><span class="font-semibold text-slate-700" x-text="facts.length"></span> facts</span>
+      <span><span class="font-semibold text-slate-700" x-text="intents.length"></span> intents</span>
+      <span class="font-mono" x-text="`${currentProject?.trial_count || 0}/${currentProject?.budget_max_trials}`"
+        title="已完成实验 / 预算上限"></span>
+      <span x-show="currentProject?.goal_metric" class="font-mono text-slate-400"
+        x-text="`${currentProject?.goal_metric} ${currentProject?.goal_direction === 'minimize' ? '↓' : '↑'}${currentProject?.goal_target != null ? ' → ' + currentProject.goal_target : ''}`"></span>
+    </div>
+
+    <button @click="openHintModal()"
+      class="px-2.5 py-1.5 border border-amber-200 text-amber-600 rounded-lg text-xs font-medium hover:bg-amber-50 transition"
+      title="给 Agent 一条提示，会进入它的 prompt">
+      + 提示
+    </button>
+
+    <button @click="openProjectSettings()"
+      class="px-2.5 py-1.5 border border-slate-300 text-slate-600 rounded-lg text-xs font-medium hover:bg-slate-50 transition flex items-center gap-1"
+      title="修改目标、指标、预算与 Worker 配置">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+      项目配置
+    </button>
+
+    <select x-model="searchProviderId" title="本次搜索使用的 LLM 端点"
+      class="px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-600 bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none max-w-[170px]">
+      <option value="">端点: 宿主机环境变量</option>
+      <template x-for="p in providers" :key="p.id">
+        <option :value="p.id" x-text="`端点: ${p.name}${p.is_default ? ' (默认)' : ''}`"></option>
+      </template>
+    </select>
+
+    <button x-show="!searchRunning" @click="startSearch()"
+      :disabled="currentProject?.status !== 'active'"
+      class="px-4 py-1.5 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+      <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7V5z"/></svg>
+      启动搜索
+    </button>
+    <button x-show="searchRunning" @click="stopSearch()"
+      class="px-4 py-1.5 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition flex items-center gap-1.5">
+      <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+      停止搜索
+    </button>
+  </header>
+
+  <!-- 搜索状态条 -->
+  <div x-show="searchRunning" x-cloak
+    class="bg-indigo-50 border-b border-indigo-100 px-4 py-1.5 flex items-center gap-3 text-xs shrink-0">
+    <span class="h-2 w-2 rounded-full bg-indigo-500 running-pulse"></span>
+    <span class="text-indigo-700 font-medium">搜索进行中</span>
+    <span class="text-indigo-500" x-text="`${searchStatus?.active_agents || 0} 个 Agent 在跑`"></span>
+    <span class="text-indigo-400" x-text="formatElapsed(searchStatus?.elapsed_sec)"></span>
+    <div class="flex-1"></div>
+    <button @click="sideTab = 'log'" class="text-indigo-600 hover:text-indigo-800 font-medium">查看日志 →</button>
+  </div>
+
+  <div class="flex-1 flex overflow-hidden">
+    <!-- 搜索图谱：origin/goal + Agent 产出的 fact / 进行中的 intent -->
+    <div class="flex-1 flex flex-col overflow-hidden border-r border-slate-200">
+      <div class="px-4 py-2.5 border-b border-slate-200 bg-white flex items-center gap-3 shrink-0">
+        <h3 class="font-semibold text-slate-800 text-sm">搜索图谱</h3>
+        <span class="text-xs text-slate-400">fact 是节点，intent 是边</span>
+        <div class="flex-1"></div>
+        <!-- 视图切换：DAG 流程图 / 卡片列表 -->
+        <div class="flex rounded-lg border border-slate-200 overflow-hidden">
+          <button @click="setGraphView('graph')" class="px-2.5 py-1 text-xs font-medium transition"
+            :class="graphView === 'graph' ? 'bg-indigo-500 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'">
+            流程图
+          </button>
+          <button @click="setGraphView('list')" class="px-2.5 py-1 text-xs font-medium transition border-l border-slate-200"
+            :class="graphView === 'list' ? 'bg-indigo-500 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'">
+            列表
+          </button>
+        </div>
+        <label x-show="graphView === 'list'" class="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
+          <input type="checkbox" x-model="sortFactsByMetric"
+            class="rounded border-slate-300 text-indigo-500 focus:ring-indigo-400">
+          按指标排序
+        </label>
+      </div>
+
+      <!-- 目标指标趋势：横轴是实验推进顺序，纵轴是 Agent 上报的 goal_metric -->
+      <div x-show="metricSeries().length > 1" x-cloak
+        class="px-4 pt-3 pb-1 border-b border-slate-100 bg-white shrink-0">
+        <div id="progressChart" style="width:100%;height:150px"></div>
+      </div>
+
+      <!-- ── DAG 流程图：cytoscape 画布 ── -->
+      <div x-show="graphView === 'graph'" class="flex-1 relative min-w-0 bg-slate-50/60">
+        <div class="absolute top-3 left-3 z-10 flex items-center gap-1.5">
+          <button @click="fitGraph()" title="适应画布"
+            class="h-7 w-7 bg-white/90 backdrop-blur rounded-lg shadow-sm border border-slate-200/60 text-slate-500 hover:text-slate-700 hover:bg-white transition inline-flex items-center justify-center">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.7" viewBox="0 0 24 24">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/>
+              <path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
+          </button>
+          <select x-model="layoutMode" @change="applySelectedLayout()"
+            class="h-7 bg-white/90 backdrop-blur rounded-lg shadow-sm border border-slate-200/60 px-2.5 text-xs text-slate-600 hover:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 transition">
+            <option value="dagre_tb">Dagre ↓</option>
+            <option value="dagre_lr">Dagre →</option>
+            <option value="klay_tb">Klay ↓</option>
+            <option value="klay_lr">Klay →</option>
+            <option value="elk_tb">ELK ↓</option>
+            <option value="elk_lr">ELK →</option>
+          </select>
+        </div>
+
+        <!-- 图例 -->
+        <div class="absolute bottom-3 left-3 z-10 bg-white/90 backdrop-blur rounded-lg shadow-sm border border-slate-200/60 px-2.5 py-2 text-[10px] text-slate-500 space-y-1">
+          <div class="flex items-center gap-1.5"><span class="h-2.5 w-3.5 rounded bg-teal-500"></span>起点</div>
+          <div class="flex items-center gap-1.5"><span class="h-2.5 w-3.5 rounded bg-rose-500"></span>目标</div>
+          <div class="flex items-center gap-1.5"><span class="h-2.5 w-3.5 rounded bg-indigo-500"></span>fact 结论</div>
+          <div class="flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full bg-amber-500"></span>进行中</div>
+          <div class="flex items-center gap-1.5"><span class="h-2.5 w-2.5 rounded-full border border-dashed border-slate-400 bg-slate-200"></span>待领取</div>
+        </div>
+
+        <div x-show="!facts.length && !intents.length"
+          class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+          <div class="text-center">
+            <p class="text-sm text-slate-400">图谱为空</p>
+            <p class="text-xs text-slate-300 mt-1">点击"启动搜索"让 Agent 开始探索</p>
+          </div>
+        </div>
+
+        <div id="cy" class="absolute inset-0"></div>
+      </div>
+
+      <!-- ── 卡片列表视图 ── -->
+      <div x-show="graphView === 'list'" class="flex-1 overflow-y-auto p-4 space-y-2.5">
+        <template x-if="!facts.length && !intents.length">
+          <div class="text-center py-16">
+            <p class="text-sm text-slate-400">图谱为空</p>
+            <p class="text-xs text-slate-300 mt-1">点击"启动搜索"让 Agent 开始探索</p>
+          </div>
+        </template>
+
+        <!-- 进行中的 intent（置顶，Agent 正在跑） -->
+        <template x-for="intent in workingIntents()" :key="intent.id">
+          <div class="bg-white rounded-xl border-2 border-indigo-200 p-3.5 cursor-pointer hover:shadow-md transition"
+            :class="selectedNode?.type === 'intent' && selectedNode?.id === intent.id ? 'ring-2 ring-indigo-300' : ''"
+            @click="selectIntent(intent.id)">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="h-2 w-2 rounded-full bg-indigo-500 running-pulse shrink-0"></span>
+              <span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-mono font-bold"
+                x-text="intent.id"></span>
+              <span class="text-[10px] text-slate-400 uppercase tracking-wide">intent 进行中</span>
+              <div class="flex-1"></div>
+              <span class="text-[10px] font-mono text-slate-400" x-text="intent.worker"></span>
+            </div>
+            <p class="text-sm text-slate-700 leading-relaxed line-clamp-2" x-text="intent.description"></p>
+            <div class="text-[11px] text-slate-400 mt-1.5">
+              从 <span class="font-mono" x-text="(intent.from || []).join(', ')"></span> 出发
+            </div>
+          </div>
+        </template>
+
+        <!-- 待领取的 intent -->
+        <template x-for="intent in unclaimedIntents()" :key="intent.id">
+          <div class="bg-white rounded-xl border border-dashed border-slate-300 p-3 cursor-pointer hover:border-slate-400 transition"
+            :class="selectedNode?.type === 'intent' && selectedNode?.id === intent.id ? 'ring-2 ring-slate-300' : ''"
+            @click="selectIntent(intent.id)">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-mono font-bold"
+                x-text="intent.id"></span>
+              <span class="text-[10px] text-slate-400 uppercase tracking-wide">待领取</span>
+            </div>
+            <p class="text-sm text-slate-600 leading-relaxed line-clamp-2" x-text="intent.description"></p>
+          </div>
+        </template>
+
+        <!-- Origin & Goal：项目起点与目标，始终显示 -->
+        <template x-for="fact in facts.filter(f => f.id === 'origin' || f.id === 'goal')" :key="fact.id">
+          <div class="rounded-xl border-2 p-3.5 cursor-pointer hover:shadow-md transition"
+            :class="[
+              fact.id === 'origin' ? 'bg-teal-50 border-teal-200 hover:border-teal-300' : 'bg-rose-50 border-rose-200 hover:border-rose-300',
+              selectedNode?.type === 'fact' && selectedNode?.id === fact.id ? 'ring-2 ring-offset-1' : '',
+              fact.id === 'origin' ? 'ring-teal-300' : 'ring-rose-300'
+            ]"
+            @click="selectFact(fact.id)">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold"
+                :class="fact.id === 'origin' ? 'bg-teal-100 text-teal-800' : 'bg-rose-100 text-rose-800'"
+                x-text="fact.id"></span>
+              <span class="text-[10px] uppercase tracking-wide font-semibold"
+                :class="fact.id === 'origin' ? 'text-teal-700' : 'text-rose-700'"
+                x-text="fact.id === 'origin' ? '起点' : '目标'"></span>
+            </div>
+            <p class="text-sm leading-relaxed line-clamp-3"
+              :class="fact.id === 'origin' ? 'text-teal-900' : 'text-rose-900'"
+              x-text="fact.description"></p>
+          </div>
+        </template>
+
+        <!-- facts：Agent 已确认的实验结论 -->
+        <template x-for="fact in sortedFacts()" :key="fact.id">
+          <div class="bg-white rounded-xl border border-slate-200 p-3.5 cursor-pointer hover:shadow-md hover:border-slate-300 transition"
+            :class="selectedNode?.type === 'fact' && selectedNode?.id === fact.id ? 'ring-2 ring-indigo-200 border-indigo-300' : ''"
+            @click="selectFact(fact.id)">
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold shrink-0"
+                :class="fact.id === 'origin' ? 'bg-teal-50 text-teal-700' : (fact.id === 'goal' ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-700')"
+                x-text="fact.id"></span>
+              <span class="text-[10px] text-slate-400 uppercase tracking-wide"
+                x-text="fact.id === 'origin' ? '起点' : (fact.id === 'goal' ? '目标' : 'fact')"></span>
+              <div class="flex-1"></div>
+              <span x-show="isBestFact(fact)"
+                class="px-1.5 py-0.5 rounded bg-teal-50 text-teal-700 text-[10px] font-semibold">最佳</span>
+              <span class="text-[10px] text-slate-400" x-text="formatDate(fact.created_at)"></span>
+            </div>
+            <p class="text-sm text-slate-700 leading-relaxed line-clamp-3" x-text="fact.description"></p>
+
+            <!-- Agent 报告的指标：键名任意，全部渲染 -->
+            <div x-show="Object.keys(fact.metrics || {}).length" class="flex flex-wrap gap-1.5 mt-2">
+              <template x-for="[key, value] in Object.entries(fact.metrics || {})" :key="key">
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-mono"
+                  :class="key === currentProject?.goal_metric ? 'bg-indigo-50 text-indigo-700 font-semibold' : 'bg-slate-100 text-slate-600'">
+                  <span x-text="key"></span>
+                  <span x-text="formatMetric(value)"></span>
+                </span>
+              </template>
+            </div>
+
+            <div x-show="producingIntent(fact.id)" class="text-[11px] text-slate-400 mt-1.5">
+              由 <span class="font-mono" x-text="producingIntent(fact.id)?.id"></span>
+              从 <span class="font-mono" x-text="(producingIntent(fact.id)?.from || []).join(', ')"></span> 得到
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+    <!-- 右侧面板 -->
+    <div class="w-[400px] flex flex-col bg-white shrink-0 overflow-hidden">
+      <div class="flex border-b border-slate-200 shrink-0">
+        <button @click="sideTab = 'detail'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+          :class="sideTab === 'detail' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
+          详情
+        </button>
+        <button @click="sideTab = 'hints'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+          :class="sideTab === 'hints' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
+          提示 <span class="text-[10px] opacity-60" x-text="hints.length"></span>
+        </button>
+        <button @click="sideTab = 'timeline'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+          :class="sideTab === 'timeline' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
+          时间线
+        </button>
+        <button @click="sideTab = 'log'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+          :class="sideTab === 'log' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
+          日志
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto">
+        <!-- 详情 -->
+        <div x-show="sideTab === 'detail'" class="p-4 space-y-4">
+          <template x-if="!selectedNode">
+            <div class="rounded-xl border border-dashed border-slate-200 px-5 py-10 text-center">
+              <p class="text-sm text-slate-400">点击左侧的 fact 或 intent</p>
+              <p class="text-xs text-slate-300 mt-1">查看它的详情与产物</p>
+            </div>
+          </template>
+
+          <!-- 选中 fact -->
+          <template x-if="selectedNode?.type === 'fact' && selectedFact">
+            <div class="space-y-4">
+              <div>
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold"
+                    :class="selectedFact.id === 'origin' ? 'bg-teal-50 text-teal-700' : (selectedFact.id === 'goal' ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-700')"
+                    x-text="selectedFact.id"></span>
+                  <span class="text-[11px] text-slate-400" x-text="formatDate(selectedFact.created_at)"></span>
+                </div>
+                <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words"
+                  x-text="selectedFact.description"></p>
+              </div>
+
+              <!-- 指标：Agent 上报什么就显示什么 -->
+              <div x-show="Object.keys(selectedFact.metrics || {}).length">
+                <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">上报指标</h4>
+                <div class="space-y-1">
+                  <template x-for="[key, value] in Object.entries(selectedFact.metrics || {})" :key="key">
+                    <div class="flex items-center justify-between px-2.5 py-1.5 rounded-lg"
+                      :class="key === currentProject?.goal_metric ? 'bg-indigo-50' : 'bg-slate-50'">
+                      <span class="text-xs font-mono"
+                        :class="key === currentProject?.goal_metric ? 'text-indigo-700 font-semibold' : 'text-slate-600'"
+                        x-text="key"></span>
+                      <span class="text-xs font-mono font-semibold"
+                        :class="key === currentProject?.goal_metric ? 'text-indigo-700' : 'text-slate-700'"
+                        x-text="formatMetric(value)"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <!-- 训练产物 -->
+              <div x-show="selectedFact.artifacts" class="bg-blue-50 rounded-lg p-3">
+                <h4 class="text-xs font-semibold text-blue-900 uppercase tracking-wide mb-2 flex items-center gap-1">
+                  <span>🗂️</span>
+                  <span>训练产物</span>
+                </h4>
+                <dl class="space-y-1.5 text-xs">
+                  <template x-if="selectedFact.artifacts?.checkpoint_path">
+                    <div>
+                      <dt class="inline font-medium text-slate-700">Checkpoint:</dt>
+                      <dd class="inline text-blue-700 font-mono text-[11px] break-all ml-1" x-text="selectedFact.artifacts.checkpoint_path"></dd>
+                    </div>
+                  </template>
+                  <template x-if="selectedFact.artifacts?.out_dir">
+                    <div>
+                      <dt class="inline font-medium text-slate-700">输出目录:</dt>
+                      <dd class="inline text-blue-700 font-mono text-[11px] break-all ml-1" x-text="selectedFact.artifacts.out_dir"></dd>
+                    </div>
+                  </template>
+                  <template x-if="selectedFact.artifacts?.architecture">
+                    <div>
+                      <dt class="inline font-medium text-slate-700">架构:</dt>
+                      <dd class="inline text-slate-800 ml-1" x-text="selectedFact.artifacts.architecture"></dd>
+                    </div>
+                  </template>
+                  <template x-if="selectedFact.artifacts?.config_path">
+                    <div>
+                      <dt class="inline font-medium text-slate-700">配置:</dt>
+                      <dd class="inline text-blue-700 font-mono text-[11px] break-all ml-1" x-text="selectedFact.artifacts.config_path"></dd>
+                    </div>
+                  </template>
+                  <!-- 附加字段（可选产物） -->
+                  <template x-if="selectedFact.artifacts && Object.keys(selectedFact.artifacts).filter(k => !['checkpoint_path','out_dir','architecture','config_path'].includes(k)).length > 0">
+                    <details class="mt-2">
+                      <summary class="cursor-pointer text-blue-700 font-medium">
+                        附加信息 (<span x-text="Object.keys(selectedFact.artifacts).filter(k => !['checkpoint_path','out_dir','architecture','config_path'].includes(k)).length"></span>)
+                      </summary>
+                      <pre class="mt-1.5 text-[10px] bg-white p-2 rounded border border-blue-100 overflow-x-auto" x-text="JSON.stringify(
+                        Object.fromEntries(
+                          Object.entries(selectedFact.artifacts).filter(([k]) => !['checkpoint_path','out_dir','architecture','config_path'].includes(k))
+                        ), null, 2
+                      )"></pre>
+                    </details>
+                  </template>
+                </dl>
+              </div>
+
+              <div x-show="producingIntent(selectedFact.id)" class="text-xs text-slate-500">
+                <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">来源</h4>
+                <p>
+                  由 intent <span class="font-mono text-slate-700" x-text="producingIntent(selectedFact.id)?.id"></span>
+                  产出，出发点
+                  <span class="font-mono text-slate-700" x-text="(producingIntent(selectedFact.id)?.from || []).join(', ')"></span>
+                </p>
+                <p class="mt-1 text-slate-600" x-text="producingIntent(selectedFact.id)?.description"></p>
+              </div>
+
+              <!-- Agent 报的 trial_id：仅作标识，产物目录按项目共享故不逐个读取 -->
+              <div x-show="selectedFact.trial_id" class="text-xs text-slate-500">
+                <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">试验标识</h4>
+                <span class="font-mono text-slate-700" x-text="selectedFact.trial_id"></span>
+              </div>
+            </div>
+          </template>
+
+          <!-- 选中 intent -->
+          <template x-if="selectedNode?.type === 'intent' && selectedIntent">
+            <div class="space-y-4">
+              <div>
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-mono font-bold"
+                    x-text="selectedIntent.id"></span>
+                  <span class="text-[10px] text-slate-400 uppercase tracking-wide"
+                    x-text="selectedIntent.to ? '已结论' : (selectedIntent.worker ? '进行中' : '待领取')"></span>
+                  <span class="text-[11px] text-slate-400" x-text="formatDate(selectedIntent.created_at)"></span>
+                </div>
+                <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words"
+                  x-text="selectedIntent.description"></p>
+              </div>
+              <div class="text-xs text-slate-500 space-y-1">
+                <p>出发点: <span class="font-mono text-slate-700" x-text="(selectedIntent.from || []).join(', ')"></span></p>
+                <p>提出者: <span class="font-mono text-slate-700" x-text="selectedIntent.creator"></span></p>
+                <p x-show="selectedIntent.worker">执行者: <span class="font-mono text-slate-700" x-text="selectedIntent.worker"></span></p>
+                <p x-show="selectedIntent.to">
+                  产出: <button @click="selectFact(selectedIntent.to)"
+                    class="font-mono text-indigo-600 hover:underline" x-text="selectedIntent.to"></button>
+                </p>
+              </div>
+            </div>
+          </template>
+        </div>
+        <!-- 提示：会进入 Agent 的 bootstrap prompt -->
+        <div x-show="sideTab === 'hints'" class="p-4 space-y-3">
+          <div class="flex items-center gap-2">
+            <p class="text-xs text-slate-500 flex-1">提示会写进 Agent 的 prompt，用来注入领域知识</p>
+            <button @click="openHintModal()"
+              class="px-2.5 py-1 text-xs bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition">
+              + 添加
+            </button>
+          </div>
+
+          <template x-if="!hints.length">
+            <div class="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center">
+              <p class="text-sm text-slate-400">还没有提示</p>
+              <p class="text-xs text-slate-300 mt-1">例如「先用小 batch 验证链路再放大」</p>
+            </div>
+          </template>
+
+          <template x-for="hint in hints" :key="hint.id">
+            <div class="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-mono font-bold"
+                  x-text="hint.id"></span>
+                <span class="text-[10px] text-slate-400" x-text="hint.creator"></span>
+                <div class="flex-1"></div>
+                <span class="text-[10px] text-slate-400" x-text="formatDate(hint.created_at)"></span>
+              </div>
+              <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words"
+                x-text="hint.content"></p>
+            </div>
+          </template>
+        </div>
+
+        <!-- 时间线：facts / intents / hints 按时间合并 -->
+        <div x-show="sideTab === 'timeline'" class="p-4 space-y-2">
+          <template x-if="!timelineEvents().length">
+            <div class="rounded-xl border border-dashed border-slate-200 px-5 py-8 text-center">
+              <p class="text-sm text-slate-400">暂无活动</p>
+            </div>
+          </template>
+
+          <template x-for="ev in timelineEvents()" :key="ev.key">
+            <div class="flex gap-2.5 cursor-pointer group" @click="selectTimelineEvent(ev)">
+              <div class="flex flex-col items-center shrink-0 pt-1">
+                <span class="h-2 w-2 rounded-full shrink-0"
+                  :class="ev.type === 'fact' ? 'bg-indigo-400' : (ev.type === 'intent' ? 'bg-slate-300' : 'bg-amber-400')"></span>
+                <span class="w-px flex-1 bg-slate-200 mt-1"></span>
+              </div>
+              <div class="min-w-0 flex-1 pb-3">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-[10px] font-mono font-bold"
+                    :class="ev.type === 'fact' ? 'text-indigo-600' : (ev.type === 'intent' ? 'text-slate-500' : 'text-amber-600')"
+                    x-text="ev.id"></span>
+                  <span class="text-[10px] text-slate-400 uppercase tracking-wide" x-text="ev.label"></span>
+                  <div class="flex-1"></div>
+                  <span class="text-[10px] text-slate-400" x-text="formatDate(ev.at)"></span>
+                </div>
+                <p class="text-xs text-slate-600 leading-relaxed line-clamp-2 group-hover:text-slate-800"
+                  x-text="ev.description"></p>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 日志：dispatcher 环形缓冲 -->
+        <div x-show="sideTab === 'log'" class="flex flex-col h-full">
+          <div class="px-4 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
+            <p class="text-xs text-slate-500 flex-1">调度器日志</p>
+            <button @click="loadLogs()" class="text-xs text-indigo-600 hover:text-indigo-800">刷新</button>
+          </div>
+          <template x-if="!dispatchLog">
+            <div class="px-4 py-8 text-center">
+              <p class="text-sm text-slate-400">暂无日志</p>
+              <p class="text-xs text-slate-300 mt-1">启动搜索后这里会显示调度过程</p>
+            </div>
+          </template>
+          <pre x-show="dispatchLog"
+            class="flex-1 overflow-auto p-3 bg-slate-900 text-slate-300 text-[11px] font-mono whitespace-pre-wrap"
+            x-text="dispatchLog"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════ 新建项目 ═══════════ -->
+<div x-show="showNewProject" x-cloak
+  class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+  @click.self="showNewProject = false">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col" @click.stop>
+    <div class="px-6 py-4 border-b border-slate-200 shrink-0">
+      <h3 class="text-lg font-semibold text-slate-800">新建项目</h3>
+      <p class="text-xs text-slate-500 mt-0.5">描述起点和目标，Agent 会自己写训练代码去探索</p>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-6 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">项目标题</label>
+        <input x-model="newProject.title"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+          placeholder="例如: T2M 文本到动作生成">
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">起点 (Origin)</label>
+        <textarea x-model="newProject.origin" rows="2"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+          placeholder="当前的基线状态，Agent 从这里出发"></textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">目标 (Goal)</label>
+        <textarea x-model="newProject.goal" rows="2"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+          placeholder="希望达成什么。可以是自然语言描述"></textarea>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-2">
+          <label class="block text-sm font-medium text-slate-700 mb-1">目标指标</label>
+          <input x-model="newProject.goal_metric" list="metricSuggestions"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+            placeholder="val_loss">
+          <datalist id="metricSuggestions">
+            <option value="val_loss"></option>
+            <option value="val_acc"></option>
+            <option value="test_acc"></option>
+            <option value="f1"></option>
+            <option value="bleu"></option>
+            <option value="perplexity"></option>
+          </datalist>
+          <p class="text-xs text-slate-400 mt-1">任意指标名，Agent 上报什么都能收</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">方向</label>
+          <select x-model="newProject.goal_direction"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+            <option value="minimize">越小越好</option>
+            <option value="maximize">越大越好</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">目标阈值</label>
+          <input type="number" step="any" x-model="newProject.goal_target"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+            placeholder="可留空">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">实验预算</label>
+          <input type="number" min="1" x-model="newProject.budget_max_trials"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+            placeholder="12">
+          <p class="text-xs text-slate-400 mt-1">达到后调度器停止</p>
+        </div>
+      </div>
+
+      <label class="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+        <input type="checkbox" x-model="newProject.bootstrap_enabled"
+          class="rounded border-slate-300 text-indigo-500 focus:ring-indigo-400">
+        运行 bootstrap 阶段
+        <span class="text-xs text-slate-400">(先让 Agent 摸清资源、建立可复现基线)</span>
+      </label>
+
+      <!-- 初始提示 -->
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="text-sm font-medium text-slate-700">初始提示 (可选)</label>
+          <button type="button" @click="newProject.hints.push({ content: '' })"
+            class="text-xs text-indigo-600 hover:text-indigo-700 font-medium">+ 添加</button>
+        </div>
+        <p class="text-xs text-slate-400 mb-2">会写进 Agent 的 prompt，用来注入你已有的领域知识</p>
+        <template x-for="(hint, idx) in newProject.hints" :key="idx">
+          <div class="flex items-center gap-1.5 mb-1.5">
+            <input x-model="hint.content"
+              class="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+              placeholder="例如: 数据在 /data/xxx，先跑小样本验证链路">
+            <button type="button" @click="newProject.hints.splice(idx, 1)"
+              x-show="newProject.hints.length > 1"
+              class="px-2 text-slate-300 hover:text-red-400 transition">&times;</button>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <div class="px-6 py-4 border-t border-slate-200 flex justify-end gap-3 shrink-0">
+      <button @click="showNewProject = false"
+        class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition">取消</button>
+      <button @click="createProject()"
+        :disabled="!newProject.title || !newProject.origin || !newProject.goal"
+        class="px-6 py-2 text-sm bg-indigo-500 text-white rounded-lg font-medium hover:bg-indigo-600 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        创建
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 添加提示 ═══════════ -->
+<div x-show="showHintModal" x-cloak
+  class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+  @click.self="showHintModal = false">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-md p-6" @click.stop>
+    <h3 class="text-lg font-semibold text-slate-800 mb-1">添加提示</h3>
+    <p class="text-xs text-slate-500 mb-4">提示会进入 Agent 的 prompt，用来引导下一步探索方向</p>
+
+    <textarea x-model="newHint.content" rows="4"
+      class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-400 focus:border-amber-400 outline-none"
+      placeholder="例如: batch_size 超过 256 会 OOM，别再试了"></textarea>
+
+    <div class="mt-3">
+      <label class="block text-xs font-medium text-slate-600 mb-1">提出者</label>
+      <input x-model="newHint.creator"
+        class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-400 focus:border-amber-400 outline-none"
+        placeholder="human">
+    </div>
+
+    <div class="flex justify-end gap-3 mt-5">
+      <button @click="showHintModal = false"
+        class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition">取消</button>
+      <button @click="createHint()" :disabled="!newHint.content.trim()"
+        class="px-6 py-2 text-sm bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        添加
+      </button>
+    </div>
+  </div>
+</div>
+<!-- ═══════════ 项目配置（进入项目后修改） ═══════════ -->
+<div x-show="showProjectSettings" x-cloak
+  class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+  @click.self="showProjectSettings = false">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col" @click.stop>
+    <div class="px-6 py-4 border-b border-slate-200 flex items-center gap-3 shrink-0">
+      <div>
+        <h3 class="text-lg font-semibold text-slate-800">项目配置</h3>
+        <p class="text-xs text-slate-500 mt-0.5">
+          <span class="font-mono" x-text="currentProject?.id"></span>
+          · 修改后对之后启动的搜索生效
+        </p>
+      </div>
+      <div class="flex-1"></div>
+      <button @click="showProjectSettings = false" class="text-slate-400 hover:text-slate-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="px-6 py-5 space-y-4 overflow-y-auto" x-show="projectForm">
+      <div x-show="searchRunning"
+        class="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+        搜索正在运行，改动不影响当前这一轮，停止后重新启动才会套用。
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">标题</label>
+        <input x-model="projectForm.title"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Origin（起点）</label>
+        <textarea x-model="projectForm.origin" rows="2"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none resize-y"></textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Goal（目标）</label>
+        <textarea x-model="projectForm.goal" rows="2"
+          class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none resize-y"></textarea>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">目标指标</label>
+          <input x-model="projectForm.goal_metric" list="metricSuggestions"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          <p class="text-xs text-slate-400 mt-1">排行榜与最优判定都按它算</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">方向</label>
+          <select x-model="projectForm.goal_direction"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+            <option value="minimize">越小越好</option>
+            <option value="maximize">越大越好</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">目标阈值</label>
+          <input type="number" step="any" x-model="projectForm.goal_target"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none"
+            placeholder="留空表示不设阈值">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">实验预算</label>
+          <input type="number" min="1" x-model="projectForm.budget_max_trials"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          <p class="text-xs text-slate-400 mt-1">达到后调度器停止</p>
+        </div>
+      </div>
+
+      <label class="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+        <input type="checkbox" x-model="projectForm.bootstrap_enabled"
+          class="rounded border-slate-300 text-indigo-500 focus:ring-indigo-400">
+        运行 bootstrap 阶段
+        <span class="text-xs text-slate-400">(先摸清资源、建立可复现基线)</span>
+      </label>
+
+      <div class="pt-4 border-t border-slate-200">
+        <h4 class="text-sm font-semibold text-slate-700 mb-1">搜索配置</h4>
+        <p class="text-xs text-slate-400 mb-3">调度器每轮并发多少 Agent、最多跑多少次实验</p>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">单轮实验上限</label>
+            <input type="number" min="1" max="1000" x-model="projectForm.max_trials"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">并发 Worker 数</label>
+            <input type="number" min="1" max="32" x-model="projectForm.max_workers"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+        </div>
+      </div>
+
+      <!-- Worker 名册 -->
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="text-sm font-medium text-slate-700">Worker 名册</label>
+          <button type="button" @click="addProjectWorker()"
+            class="text-xs text-indigo-600 hover:text-indigo-700 font-medium">+ 添加</button>
+        </div>
+        <p class="text-xs text-slate-400 mb-2">
+          driver 选 <span class="font-mono">mock</span> 时不调用真实 LLM，用来验证链路；
+          其他 driver 才会用下面选的端点
+        </p>
+
+        <div class="space-y-1.5">
+          <template x-for="(w, idx) in projectForm.workers" :key="idx">
+            <div class="flex items-center gap-1.5">
+              <input x-model="w.name" placeholder="worker 名称"
+                class="flex-1 min-w-0 px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+              <select x-model="w.driver"
+                class="px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-600 bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+                <option value="mock">mock</option>
+                <option value="claudecode">claudecode</option>
+                <option value="llm">llm</option>
+              </select>
+              <select x-model="w.provider_id" :disabled="w.driver === 'mock'"
+                class="px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-600 bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none max-w-[150px] disabled:bg-slate-50 disabled:text-slate-400">
+                <option value="">端点: 默认/环境变量</option>
+                <template x-for="p in providers" :key="p.id">
+                  <option :value="p.id" x-text="p.name"></option>
+                </template>
+              </select>
+              <button type="button" @click="removeProjectWorker(idx)"
+                x-show="projectForm.workers.length > 1"
+                class="px-2 text-slate-300 hover:text-red-400 transition shrink-0">&times;</button>
+            </div>
+          </template>
+        </div>
+        <p x-show="!projectForm.workers.length" x-cloak
+          class="text-xs text-red-500 mt-1.5">至少需要一个 Worker，否则搜索无法启动</p>
+      </div>
+    </div>
+
+    <div class="px-6 py-4 border-t border-slate-200 flex items-center gap-3 shrink-0">
+      <p class="text-xs text-red-500 flex-1" x-show="projectFormError" x-text="projectFormError"></p>
+      <div class="flex-1" x-show="!projectFormError"></div>
+      <button @click="showProjectSettings = false"
+        class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition">取消</button>
+      <button @click="saveProjectSettings()"
+        :disabled="projectFormSaving || !projectForm?.title || !projectForm?.origin || !projectForm?.goal || !projectForm?.goal_metric"
+        class="px-6 py-2 text-sm bg-indigo-500 text-white rounded-lg font-medium hover:bg-indigo-600 transition disabled:opacity-40 disabled:cursor-not-allowed">
+        <span x-show="!projectFormSaving">保存</span>
+        <span x-show="projectFormSaving" x-cloak>保存中…</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 设置：LLM Provider ═══════════ -->
+<div x-show="showSettings" x-cloak
+  class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+  @click.self="showSettings = false">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col" @click.stop>
+    <div class="px-6 py-4 border-b border-slate-200 flex items-center gap-3 shrink-0">
+      <div>
+        <h3 class="text-lg font-semibold text-slate-800">LLM API 设置</h3>
+        <p class="text-xs text-slate-500 mt-0.5">任意 OpenAI 兼容端点或 Anthropic 端点</p>
+      </div>
+      <div class="flex-1"></div>
+      <button @click="showSettings = false" class="text-slate-400 hover:text-slate-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-6 space-y-5">
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-sm font-semibold text-slate-700">已配置的端点</h4>
+          <button @click="newProviderForm()"
+            class="px-3 py-1.5 text-xs bg-indigo-500 text-white rounded-lg font-medium hover:bg-indigo-600 transition">
+            + 添加端点
+          </button>
+        </div>
+
+        <div x-show="!providers.length"
+          class="text-center py-8 text-sm text-slate-400 border border-dashed border-slate-200 rounded-lg">
+          还没有配置端点。未配置时 Agent 回退到宿主机环境变量。
+        </div>
+
+        <div class="space-y-2">
+          <template x-for="p in providers" :key="p.id">
+            <div class="border border-slate-200 rounded-lg p-3 flex items-center gap-3 hover:border-slate-300 transition">
+              <div class="h-8 w-8 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                :class="p.kind === 'openai' ? 'bg-emerald-500' : (p.kind === 'anthropic' ? 'bg-orange-500' : 'bg-purple-500')"
+                x-text="p.kind === 'openai' ? 'OAI' : (p.kind === 'anthropic' ? 'ANT' : 'CC')"></div>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium text-slate-800 truncate" x-text="p.name"></span>
+                  <span x-show="p.is_default"
+                    class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-medium shrink-0">默认</span>
+                </div>
+                <div class="text-xs text-slate-500 truncate">
+                  <span x-text="p.model || '(未设置模型)'"></span>
+                  <span class="text-slate-300 mx-1">·</span>
+                  <span x-text="p.base_url || '(宿主机默认)'"></span>
+                  <span class="text-slate-300 mx-1">·</span>
+                  <span :class="p.has_api_key ? '' : 'text-amber-600'"
+                    x-text="p.has_api_key ? p.api_key_masked : '无密钥'"></span>
+                </div>
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <span x-show="providerTests[p.id]" class="text-xs"
+                  :class="providerTests[p.id]?.ok ? 'text-emerald-600' : 'text-red-500'"
+                  x-text="providerTests[p.id] ? (providerTests[p.id].ok ? '✓ ' + Math.round(providerTests[p.id].latency_ms) + 'ms' : '✗ 失败') : ''"></span>
+                <button @click="testProvider(p.id)" :disabled="testingProviderId === p.id"
+                  class="px-2.5 py-1 text-xs border border-slate-300 text-slate-600 rounded hover:bg-slate-50 transition disabled:opacity-40"
+                  x-text="testingProviderId === p.id ? '测试中…' : '测试'"></button>
+                <button @click="editProviderForm(p)"
+                  class="px-2.5 py-1 text-xs border border-slate-300 text-slate-600 rounded hover:bg-slate-50 transition">编辑</button>
+                <button @click="deleteProvider(p)"
+                  class="px-2.5 py-1 text-xs border border-red-200 text-red-500 rounded hover:bg-red-50 transition">删除</button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div x-show="providerTestError" x-cloak
+          class="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-mono break-all"
+          x-text="providerTestError"></div>
+      </div>
+
+      <!-- 端点编辑表单 -->
+      <div x-show="providerForm" x-cloak class="border-t border-slate-200 pt-5 space-y-4">
+        <h4 class="text-sm font-semibold text-slate-700"
+          x-text="providerForm?.id ? '编辑端点' : '添加端点'"></h4>
+
+        <div class="flex flex-wrap gap-1.5 items-center">
+          <span class="text-xs text-slate-500">快捷预设:</span>
+          <template x-for="preset in providerPresets" :key="preset.label">
+            <button @click="applyPreset(preset)"
+              class="px-2 py-1 text-xs border border-slate-200 text-slate-600 rounded hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-600 transition"
+              x-text="preset.label"></button>
+          </template>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">名称 *</label>
+            <input type="text" x-model="providerForm.name" placeholder="例如 local-vllm"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">协议类型 *</label>
+            <select x-model="providerForm.kind"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+              <option value="openai">OpenAI 兼容 (/v1/chat/completions)</option>
+              <option value="anthropic">Anthropic (/v1/messages)</option>
+              <option value="claudecode">Claude Code CLI</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Base URL *</label>
+          <input type="text" x-model="providerForm.base_url" placeholder="http://127.0.0.1:8000"
+            class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          <p class="text-xs text-slate-400 mt-1">不含 <code>/v1</code> 后缀，系统自动追加</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">API Key</label>
+            <input type="password" x-model="providerForm.api_key"
+              :placeholder="providerForm?.id && providerForm?.has_api_key ? '留空保持不变 (' + providerForm.api_key_masked + ')' : 'sk-...'"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">模型名 *</label>
+            <input type="text" x-model="providerForm.model" placeholder="gpt-4o / qwen2.5-72b-instruct"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">max_tokens</label>
+            <input type="number" x-model="providerForm.max_tokens" min="1" max="200000"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">temperature</label>
+            <input type="number" x-model="providerForm.temperature" step="0.1" min="0" max="2" placeholder="默认"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+          </div>
+          <div class="flex items-end pb-2">
+            <label class="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+              <input type="checkbox" x-model="providerForm.is_default"
+                class="rounded border-slate-300 text-indigo-500 focus:ring-indigo-400">
+              设为默认
+            </label>
+          </div>
+        </div>
+
+        <div x-show="providerFormTest" x-cloak class="p-3 rounded-lg text-xs"
+          :class="providerFormTest?.ok ? 'bg-emerald-50 border border-emerald-200 text-emerald-700' : 'bg-red-50 border border-red-200 text-red-700'">
+          <template x-if="providerFormTest?.ok">
+            <div>
+              <div class="font-medium">✓ 连接成功</div>
+              <div class="mt-1 font-mono">
+                延迟 <span x-text="Math.round(providerFormTest.latency_ms)"></span>ms
+                · 模型 <span x-text="providerFormTest.model"></span>
+              </div>
+              <div class="mt-1 text-emerald-600 truncate" x-text="'回复: ' + (providerFormTest.reply || '(空)')"></div>
+            </div>
+          </template>
+          <template x-if="providerFormTest && !providerFormTest.ok">
+            <div>
+              <div class="font-medium">✗ 连接失败</div>
+              <div class="mt-1 font-mono break-all" x-text="providerFormTest.error"></div>
+            </div>
+          </template>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button @click="testProviderForm()" :disabled="providerFormTesting"
+            class="px-4 py-2 text-sm border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50 transition disabled:opacity-40"
+            x-text="providerFormTesting ? '测试中…' : '测试连接'"></button>
+          <div class="flex-1"></div>
+          <button @click="providerForm = null; providerFormTest = null"
+            class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition">取消</button>
+          <button @click="saveProvider()"
+            :disabled="!providerForm?.name || (providerForm?.kind !== 'claudecode' && !providerForm?.base_url) || providerSaving"
+            class="px-6 py-2 text-sm bg-indigo-500 text-white rounded-lg font-medium hover:bg-indigo-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            x-text="providerSaving ? '保存中…' : '保存'"></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="px-6 py-4 border-t border-slate-200 flex justify-end shrink-0">
+      <button @click="showSettings = false"
+        class="px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

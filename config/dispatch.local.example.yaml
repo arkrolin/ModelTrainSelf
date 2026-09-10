@@ -1,0 +1,88 @@
+# Local execution example — workers run as processes on the dispatcher host and reuse
+# the machine's already-configured `claude` CLI. Every explore task writes and runs real
+# training code in its project workspace, so run this only on a host you are authorized
+# to use, with the GPUs you intend to spend.
+#
+# Usage:
+#   cp config/dispatch.local.example.yaml config/dispatch.yaml
+#   mts serve                              # in one shell
+#   mts dispatch --config config/dispatch.yaml
+#   mts dispatch --healthcheck             # verify the worker CLIs are on PATH first
+#
+# CREDENTIALS COME FROM THE ENVIRONMENT — never put them in this file and never commit
+# them. The claudecode driver reads:
+#   ANTHROPIC_BASE_URL    API endpoint
+#   ANTHROPIC_AUTH_TOKEN  bearer token
+#   ANTHROPIC_MODEL       model id
+# Export them in the shell that starts the dispatcher; local workers inherit that
+# environment. Any of the three may also be set per worker under `env:` below, which is
+# useful to point two workers at different models — but keep the secrets in env vars.
+#
+#   export ANTHROPIC_BASE_URL=https://api.anthropic.com
+#   export ANTHROPIC_AUTH_TOKEN=...            # from your own secret store
+#   export ANTHROPIC_MODEL=claude-opus-4-6
+#
+# DeepSeek via the Anthropic-compatible endpoint:
+#   export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+#   export ANTHROPIC_MODEL=deepseek-v4-flash
+#   export ANTHROPIC_AUTH_TOKEN=...            # your DeepSeek key
+
+server: "http://127.0.0.1:8000"
+
+runtime:
+  execution: local             # workers are host processes; MTS has no container mode
+  worker_healthcheck: disabled # no base_url to probe; startup checks the CLIs are on PATH
+  max_workers: 3               # all workers share this host — size to the machine and its GPUs
+  max_running_projects: 2
+  max_project_workers: 2
+  interval: 3
+  healthcheck_timeout: 15
+  prompt_group: "default"
+
+# Explore tasks train a model, so their timeouts are minutes-to-hours, not seconds.
+tasks:
+  bootstrap:
+    timeout: 1800
+    conclude_timeout: 300
+  reason:
+    timeout: 600
+    max_intents: 3
+  explore:
+    timeout: 7200
+    conclude_timeout: 600
+
+# Optional. workspace_root defaults to the dispatcher's current directory; each project
+# gets an isolated <workspace_root>/<project_id>/ that its explore tasks write code into.
+local:
+  # workspace_root: "/data/mts-runs"
+  completed_action: keep       # keep | remove
+
+# Extra environment for every local worker process, merged over the dispatcher's own
+# environment ({**os.environ, **common_env}). Use it for things the CLI needs at runtime,
+# e.g. an outbound proxy or which GPUs a trial may touch. Not for secrets.
+# common_env:
+#   https_proxy: "http://127.0.0.1:7897"
+#   CUDA_VISIBLE_DEVICES: "2,3,4,5"
+
+workers:
+  - name: "local-claude-1"
+    type: "claudecode"
+    task_types: [bootstrap, reason, explore]
+    max_running: 1
+    priority: 0
+
+  - name: "local-claude-2"
+    type: "claudecode"
+    task_types: [explore]
+    max_running: 1
+    priority: 1
+    # env:
+    #   ANTHROPIC_MODEL: "deepseek-v4-flash"      # per-worker override of the exported model
+
+  # A cheap non-agentic worker for reason-only duty: one HTTP call per task, no shell.
+  # - name: "local-llm"
+  #   type: "llm"
+  #   task_types: [reason]
+  #   max_running: 1
+  #   priority: 2
+  #   # reads LLM_BASE_URL / LLM_API_KEY / LLM_MODEL from the environment

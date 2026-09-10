@@ -1,0 +1,22 @@
+# Demo project definition for `mts project create --file examples/project_demo.yaml`.
+#
+# This is the project referenced by docs/07 and cli.py — the "create a project
+# first" message in `mts dispatch` points users here. It defines the same search
+# space as `mts demo`, but as a declarative config rather than inline Python.
+
+title: "字符级语言模型训练状态空间搜索"
+
+origin: "synthetic_lm 字符级语言模型，基线 pre-norm 4 层 / lr 3e-3 / 300 步"
+
+goal: "在保持 verdict=healthy 的前提下降低 val_loss；同时避免发散/梯度消失/激活死亡"
+
+goal_metric: val_loss
+goal_target: 1.70
+goal_direction: minimize
+
+base_spec: examples/specs/baseline.yaml
+
+budget_max_trials: 20
+
+hints:
+  - "优先从稳定性问题入手（发散/不稳定），再追求更低 loss"

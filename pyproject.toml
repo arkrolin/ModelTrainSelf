@@ -1,0 +1,52 @@
+[project]
+name = "mts"
+version = "0.1.0"
+description = "ModelTrainSelf — multi-agent blackboard search over deep-model training state space"
+authors = [{ name = "MolelTrainSelf" }]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "click>=8.1",
+    # Imported directly by dispatcher/config.py, server/models.py and trainer/spec.py,
+    # so it is a real dependency and not just whatever fastapi happens to pull in.
+    "pydantic>=2.9",
+    "pyyaml>=6.0",
+    "requests>=2.32.3",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# Real PyTorch training backend. Not required for the server, dispatcher,
+# knowledge store or the surrogate backend.
+train = ["torch>=2.4"]
+
+[project.scripts]
+mts = "mts.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.9,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "mts"
+module-root = "src"
+# Prompt templates ship as package data: they live inside the module root, so
+# uv_build already puts them in the wheel (only __pycache__/*.py[co] are
+# excluded by default). Listed here so they are guaranteed to land in the sdist
+# too — load_prompt() reads them through importlib.resources at runtime.
+source-include = ["src/mts/dispatcher/prompts/**/*.md"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple"
+default = true

@@ -1,0 +1,28 @@
+# Real PyTorch end-to-end test project: no hardcoded spec, everything in prose.
+#
+# The bootstrap prompt already enforces this design:
+# "数据集路径、预训练模型压缩包等资源都写在 Origin 和 Hints 文本里，不要凭空假设路径。"
+# "必须真的跑训练并读取真实输出的指标。**绝对不要编造、估计或"预期"任何指标数值。**"
+
+title: "真实 PyTorch GPU 训练端到端测试"
+
+origin: |
+  合成字符级语言模型任务，验证真实 GPU 训练流程。
+  数据集：synthetic_lm（内置合成数据，无需外部路径）
+  架构：transformer，2 层 / d_model 128 / 2 头
+  训练：lr 3e-4 / batch 16 / 40 步
+  设备：CUDA（如果可用）
+  基线目标：验证 backend=torch 出现在 summary.json，val_loss < 10.0
+
+goal: "验证真实 PyTorch 训练端到端协议栈：看板创建项目 → dispatcher 派发 → worker 跑真实 GPU 训练 → 注册真实指标 → conclude 完成因果图"
+
+goal_metric: val_loss
+goal_target: 8.0
+goal_direction: minimize
+
+budget_max_trials: 3
+
+hints:
+  - "第一个 trial 直接用 origin 描述的基线配置，验证训练可跑"
+  - "如果 val_loss > 10.0 说明发散，尝试降低学习率"
+  - "确保 summary.json 包含 backend=torch 和真实 CUDA 设备编号"
