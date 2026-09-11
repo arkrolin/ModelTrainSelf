@@ -43,12 +43,9 @@ def transcript_root() -> Path:
     override = os.environ.get(TRANSCRIPT_ROOT_ENV)
     if override:
         return Path(override).expanduser()
-    return (
-        Path(
-            os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")
-        ).expanduser()
-        / "projects"
-    )
+    return Path(
+        os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude")
+    ).expanduser() / "projects"
 
 
 def find_transcript(session_id: str, root: Path | None = None) -> Path | None:
@@ -101,15 +98,8 @@ def _shorten_path(path: str, workdir: str | None) -> str:
 # 每个工具挑一个最能说明"在干什么"的入参字段：命令和路径信息量最大，
 # 其余退化到 description。
 _TOOL_FIELDS: tuple[str, ...] = (
-    "command",
-    "file_path",
-    "path",
-    "pattern",
-    "query",
-    "url",
-    "notebook_path",
-    "description",
-    "prompt",
+    "command", "file_path", "path", "pattern", "query", "url",
+    "notebook_path", "description", "prompt",
 )
 _PATH_FIELDS = frozenset({"file_path", "path", "notebook_path"})
 
@@ -182,9 +172,7 @@ def parse_transcript_line(
         if btype == "text":
             text = block.get("text", "").strip()
             if text:
-                out.append(
-                    ("text", _clip(text, SUMMARY_LIMIT), _clip(text, DETAIL_LIMIT))
-                )
+                out.append(("text", _clip(text, SUMMARY_LIMIT), _clip(text, DETAIL_LIMIT)))
         elif btype == "thinking":
             text = (block.get("thinking") or "").strip()
             if text:
@@ -195,13 +183,11 @@ def parse_transcript_line(
             if isinstance(tool_input, dict):
                 with_json = json.dumps(tool_input, ensure_ascii=False, default=str)
                 detail = _clip(with_json, DETAIL_LIMIT)
-            out.append(
-                (
-                    "tool",
-                    summarize_tool(block.get("name", "tool"), tool_input, workdir),
-                    detail,
-                )
-            )
+            out.append((
+                "tool",
+                summarize_tool(block.get("name", "tool"), tool_input, workdir),
+                detail,
+            ))
         elif btype == "tool_result":
             text = _tool_result_text(block)
             if not text.strip():
@@ -252,9 +238,7 @@ class TranscriptTail:
 
 @dataclass(slots=True)
 class _ProjectFeed:
-    events: deque[ActivityEvent] = field(
-        default_factory=lambda: deque(maxlen=RING_SIZE)
-    )
+    events: deque[ActivityEvent] = field(default_factory=lambda: deque(maxlen=RING_SIZE))
     seq: int = 0
 
 
@@ -297,15 +281,18 @@ class ActivityBus:
             feed.events.append(event)
         return event
 
-    def events(
-        self, project_id: str, *, after_seq: int = 0, limit: int = 200
-    ) -> list[ActivityEvent]:
+    def events(self, project_id: str, *, after_seq: int = 0, limit: int = 200) -> list[ActivityEvent]:
+        """after_seq 之后最旧的 limit 条，按 seq 升序。
+
+        取最旧的一段而不是最新的一段：调用方按 seq 单调向前翻页，如果这里返回尾部
+        那一段，被 limit 截掉的中间事件就再也不会出现在任何一次响应里。
+        """
         with self._lock:
             feed = self._feeds.get(project_id)
             if feed is None:
                 return []
             picked = [e for e in feed.events if e.seq > after_seq]
-        return picked[-limit:]
+        return picked[:limit]
 
     def latest_seq(self, project_id: str) -> int:
         with self._lock:
@@ -404,9 +391,7 @@ class ActivityWatcher:
                             intent_id=self.intent_id,
                         )
             except Exception:  # noqa: BLE001 - 旁路观测绝不能拖垮任务
-                LOG.debug(
-                    "activity watch failed project=%s", self.project_id, exc_info=True
-                )
+                LOG.debug("activity watch failed project=%s", self.project_id, exc_info=True)
             if stopping:  # 收尾那轮读完再退
                 return
             if self._stop.wait(self.interval):

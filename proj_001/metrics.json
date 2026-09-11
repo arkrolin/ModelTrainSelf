@@ -1,0 +1,19 @@
+{
+  "trial_id": "baseline",
+  "name": "baseline",
+  "status": "completed",
+  "verdict": "underfitting",
+  "steps_completed": 300,
+  "duration_sec": 32.655,
+  "train_loss": 3.229581594467163,
+  "val_loss": 3.2257867574691774,
+  "val_acc": 0.127490234375,
+  "best_val_loss": 3.2257867574691774,
+  "best_val_loss_step": 299,
+  "best_val_acc": 0.127490234375,
+  "signals": [
+    "final val accuracy=0.127 is far below the task ceiling — the model never learned (lr too small? capacity too low?)"
+  ],
+  "backend": "torch",
+  "device": "auto"
+}

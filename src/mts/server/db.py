@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS search_configs (
     max_trials      INTEGER NOT NULL DEFAULT 12,
     max_workers     INTEGER NOT NULL DEFAULT 2,
     workers         TEXT NOT NULL DEFAULT '[]',
+    worker_requirement TEXT,
     updated_at      TEXT NOT NULL
 );
 

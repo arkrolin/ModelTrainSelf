@@ -1,0 +1,105 @@
+{
+  "trial_id": "baseline",
+  "name": "baseline",
+  "parent": null,
+  "backend": "torch",
+  "device": "auto",
+  "status": "completed",
+  "steps_completed": 300,
+  "duration_sec": 32.655,
+  "spec": {
+    "name": "baseline",
+    "parent": null,
+    "seed": 0,
+    "backend": "auto",
+    "device": "auto",
+    "precision": "fp32",
+    "arch": {
+      "kind": "transformer_decoder",
+      "n_layer": 4,
+      "d_model": 256,
+      "n_head": 4,
+      "d_ff": 1024,
+      "norm_position": "pre",
+      "norm_type": "layernorm",
+      "activation": "gelu",
+      "pos_embedding": "learned",
+      "tie_embeddings": true,
+      "dropout": 0.0,
+      "attn_dropout": 0.0,
+      "attn_bias": false,
+      "mlp_bias": false,
+      "init": {
+        "scheme": "gpt2",
+        "std": 0.02,
+        "residual_scale": null,
+        "scale_projection": true
+      },
+      "pretrained": null,
+      "num_labels": null,
+      "freeze_encoder": false
+    },
+    "optim": {
+      "name": "adamw",
+      "lr": 0.003,
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "eps": 1e-08,
+      "weight_decay": 0.1,
+      "momentum": 0.9,
+      "grad_clip": 1.0,
+      "schedule": {
+        "kind": "cosine",
+        "warmup_steps": 50,
+        "min_lr_ratio": 0.1,
+        "decay_fraction": 0.2
+      }
+    },
+    "data": {
+      "dataset": "synthetic_lm",
+      "path": null,
+      "train_path": null,
+      "val_path": null,
+      "seq_len": 128,
+      "batch_size": 32,
+      "num_workers": 0,
+      "vocab_size": 256
+    },
+    "budget": {
+      "max_steps": 300,
+      "max_epochs": 1,
+      "time_budget_sec": 900,
+      "eval_every": 25,
+      "probe_every": 25,
+      "eval_batches": 10,
+      "early_stop_patience": 0,
+      "gpu_seconds_budget": 0
+    },
+    "resource": {
+      "device": "auto",
+      "mem_bytes": 0,
+      "precision": "fp32"
+    },
+    "notes": "Demo baseline. Agents derive children via spec.derive(...) and change 1-2 axes."
+  },
+  "diff": {},
+  "diff_text": "no change",
+  "final": {
+    "train_loss": 3.229581594467163,
+    "val_loss": 3.2257867574691774,
+    "val_acc": 0.127490234375
+  },
+  "best": {
+    "val_loss": 3.2257867574691774,
+    "step": 299,
+    "val_acc": 0.127490234375
+  },
+  "verdict": "underfitting",
+  "signals": [
+    "final val accuracy=0.127 is far below the task ceiling \u2014 the model never learned (lr too small? capacity too low?)"
+  ],
+  "artifacts": {},
+  "diagnostics_path": "diagnostics.json"
+}

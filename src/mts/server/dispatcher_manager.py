@@ -96,23 +96,49 @@ def build_dispatch_config(
     `resolve_provider(None)` 给出默认 provider；两者都没有就回退到宿主机环境变量
     （ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL），保持旧行为。
     """
-    max_workers = max(1, config.max_workers)
     workers: list[dict[str, Any]] = []
-    for spec in config.workers:
-        env: dict[str, str] = {}
-        if resolve_provider is not None and spec.driver != "mock":
-            provider = resolve_provider(getattr(spec, "provider_id", None))
-            env = provider_env(provider, spec.driver)
-        workers.append(
-            {
-                "name": spec.name,
-                "type": spec.driver,
-                "task_types": ["bootstrap", "reason", "explore"],
-                "max_running": 1,
-                "priority": 0,
-                "env": env,
-            }
-        )
+    max_workers = 2
+
+    # worker_requirement 是新格式，workers 是旧格式。只填了旧 workers 的配置必须走
+    # 旧分支，否则 driver="llm" 会被顶替成 claudecode，注入的凭证环境变量也跟着错
+    # （LLM_* vs ANTHROPIC_*）。
+    if config.worker_requirement is None and config.workers:
+        max_workers = max(1, config.max_workers or len(config.workers))
+        for spec in config.workers:
+            env = {}
+            if resolve_provider is not None and spec.driver != "mock":
+                provider = resolve_provider(getattr(spec, "provider_id", None))
+                env = provider_env(provider, spec.driver)
+            workers.append(
+                {
+                    "name": spec.name,
+                    "type": spec.driver,
+                    "task_types": ["bootstrap", "reason", "explore"],
+                    "max_running": 1,
+                    "priority": 0,
+                    "env": env,
+                }
+            )
+    elif config.worker_requirement is not None:
+        req = config.worker_requirement
+        max_workers = max(1, req.count)
+        env = {}
+        if resolve_provider is not None and req.worker_type != "mock":
+            provider = resolve_provider(req.provider_id)
+            env = provider_env(provider, req.worker_type)
+        # 项目只声明「要几个什么类型的 worker」，名字由这里合成。
+        for i in range(max_workers):
+            workers.append(
+                {
+                    "name": f"{req.worker_type}-{i + 1}",
+                    "type": req.worker_type,
+                    "task_types": ["bootstrap", "reason", "explore"],
+                    "max_running": 1,
+                    "priority": 0,
+                    "env": env,
+                }
+            )
+
     if not workers:
         raise RuntimeError("No workers configured: add at least one worker to the project roster")
 

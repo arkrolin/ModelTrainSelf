@@ -14,8 +14,8 @@ from mts.dispatcher.tasks.common import (
     best_effort_release,
     cancel_reason,
     did_timeout,
-    preview,
     project_allows_conclude_fallback,
+    preview,
     run_worker_process,
     task_healthcheck_enabled,
     write_conclude_result,
@@ -53,9 +53,7 @@ def run_explore_task(
         )
         return "failed"
 
-    lease = HeartbeatLease.for_intent(
-        client, project.project.id, intent.id, worker.name, config.runtime.interval
-    )
+    lease = HeartbeatLease.for_intent(client, project.project.id, intent.id, worker.name, config.runtime.interval)
     lease.start()
     try:
         workdir = backend.ensure_running(project.project.id)
@@ -130,6 +128,9 @@ def run_explore_task(
             timeout=config.tasks.explore.timeout,
             lease=lease,
             cancellation=cancellation,
+            project_id=project.project.id,
+            session_id=session,
+            intent_id=intent.id,
         )
         execute_ms = int((time.perf_counter() - execute_started) * 1000)
         session = driver.extract_session(session, first.stdout, first.stderr)
@@ -248,12 +249,7 @@ def run_explore_task(
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     except Exception:
-        LOG.exception(
-            "explore task crashed project=%s intent=%s worker=%s",
-            project.project.id,
-            intent.id,
-            worker.name,
-        )
+        LOG.exception("explore task crashed project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
         best_effort_release(client, project.project.id, intent.id, worker.name)
         return "failed"
     finally:
@@ -286,12 +282,7 @@ def _try_conclude_fallback(
         best_effort_release(client, project_id, intent.id, worker.name)
         return "failed"
     if lease.failure is not None:
-        LOG.warning(
-            "conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s",
-            project_id,
-            intent.id,
-            worker.name,
-        )
+        LOG.warning("conclude fallback skipped because heartbeat already lost project=%s intent=%s worker=%s", project_id, intent.id, worker.name)
         best_effort_release(client, project_id, intent.id, worker.name)
         return "failed"
     if cancellation.is_cancelled:
@@ -332,12 +323,7 @@ def _try_conclude_fallback(
         },
     )
     conclude_argv = driver.build_conclude(worker, prompt, session)
-    LOG.info(
-        "starting conclude fallback project=%s intent=%s worker=%s",
-        project_id,
-        intent.id,
-        worker.name,
-    )
+    LOG.info("starting conclude fallback project=%s intent=%s worker=%s", project_id, intent.id, worker.name)
     conclude_started = time.perf_counter()
     result = _run_process(
         backend,
@@ -428,6 +414,9 @@ def _run_process(
     timeout: int,
     lease: HeartbeatLease,
     cancellation: TaskCancellation,
+    project_id: str,
+    session_id: str | None,
+    intent_id: str,
 ):
     return run_worker_process(
         backend,
@@ -438,7 +427,7 @@ def _run_process(
         timeout_seconds=timeout,
         lease=lease,
         cancellation=cancellation,
-        project_id=project.project.id,
-        session=session,
-        intent_id=intent.id,
+        project_id=project_id,
+        session=session_id,
+        intent_id=intent_id,
     )

@@ -689,23 +689,39 @@ class Service:
         row["workers"] = self.db.json_loads(row["workers"], [])
         if not row["workers"]:
             row["workers"] = list(self._SEARCH_DEFAULTS["workers"])
+        # Parse worker_requirement JSON if present
+        if row.get("worker_requirement"):
+            row["worker_requirement"] = self.db.json_loads(row["worker_requirement"], None)
         return row
 
     def put_search_config(self, pid: str, payload: Any) -> dict[str, Any]:
+        # Handle legacy workers field (deprecated)
         workers = [w.model_dump() if hasattr(w, "model_dump") else dict(w)
                    for w in (payload.workers or [])]
         if not workers:
             workers = list(self._SEARCH_DEFAULTS["workers"])
+
+        # Handle new worker_requirement field
+        worker_requirement = None
+        if hasattr(payload, 'worker_requirement') and payload.worker_requirement:
+            worker_requirement = json.dumps(payload.worker_requirement.model_dump()
+                                           if hasattr(payload.worker_requirement, "model_dump")
+                                           else dict(payload.worker_requirement))
+
+        # Handle legacy max_workers field (deprecated)
+        max_workers = payload.max_workers if hasattr(payload, 'max_workers') and payload.max_workers else 2
+
         with self.db.connect() as conn:
             conn.execute(
                 "INSERT INTO search_configs(project_id, max_trials, max_workers, "
-                "workers, updated_at) VALUES(?,?,?,?,?) "
+                "workers, worker_requirement, updated_at) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(project_id) DO UPDATE SET "
                 "max_trials=excluded.max_trials, "
                 "max_workers=excluded.max_workers, workers=excluded.workers, "
+                "worker_requirement=excluded.worker_requirement, "
                 "updated_at=excluded.updated_at",
-                (pid, payload.max_trials, payload.max_workers,
-                 json.dumps(workers), _iso_now()),
+                (pid, payload.max_trials, max_workers,
+                 json.dumps(workers), worker_requirement, _iso_now()),
             )
         return self.get_search_config(pid)
 

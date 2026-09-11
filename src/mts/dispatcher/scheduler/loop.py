@@ -377,7 +377,7 @@ class DispatcherLoop:
         return self._dispatch_bootstrap(project, intent)
 
     def _dispatch_reason(self, project: ProjectDetail, export_yaml: str, trigger: str) -> bool:
-        selection = self._select_worker(project.project.id, "reason")
+        selection = self._select_worker(project.project.id, "reason", project)
         worker = selection.worker
         if worker is None:
             self._log_changed(
@@ -441,7 +441,7 @@ class DispatcherLoop:
         return True
 
     def _dispatch_bootstrap(self, project: ProjectDetail, intent: Intent) -> bool:
-        selection = self._select_worker(project.project.id, "bootstrap")
+        selection = self._select_worker(project.project.id, "bootstrap", project)
         worker = selection.worker
         if worker is None:
             self._log_changed(
@@ -504,7 +504,7 @@ class DispatcherLoop:
         return True
 
     def _dispatch_explore(self, project: ProjectDetail, export_yaml: str, intent: Intent) -> bool:
-        selection = self._select_worker(project.project.id, "explore")
+        selection = self._select_worker(project.project.id, "explore", project)
         worker = selection.worker
         if worker is None:
             self._log_changed(
@@ -564,15 +564,33 @@ class DispatcherLoop:
         LOG.info("dispatched explore project=%s intent=%s worker=%s", project.project.id, intent.id, worker.name)
         return True
 
-    def _select_worker(self, project_id: str, task_type: str) -> WorkerSelection:
+    def _select_worker(self, project_id: str, task_type: str, project: ProjectDetail | None = None) -> WorkerSelection:
+        """Select a worker for a task, filtering by project's worker requirements if available."""
         now = time.time()
         candidates: list[WorkerConfig] = []
         blocked_busy: list[str] = []
         blocked_unhealthy: list[str] = []
         blocked_rejected: list[str] = []
         blocked_task_type: list[str] = []
+        blocked_type_mismatch: list[str] = []
         running_counts = self._worker_counts()
+
+        # Get project's worker requirements. search_config is None for a project that
+        # never had one saved (CLI-created, or created before the config existed), so
+        # the whole chain has to be optional — not just worker_requirement.
+        required_worker_type: str | None = None
+        if project is not None:
+            search_config = getattr(project.project, "search_config", None)
+            worker_req = getattr(search_config, "worker_requirement", None) if search_config else None
+            if worker_req is not None:
+                required_worker_type = worker_req.worker_type
+
         for worker in self.config.workers:
+            # Filter by worker type if project specifies a requirement
+            if required_worker_type is not None and worker.type != required_worker_type:
+                blocked_type_mismatch.append(f"{worker.name}(type={worker.type})")
+                continue
+
             if task_type not in worker.task_types:
                 blocked_task_type.append(worker.name)
                 continue
@@ -591,13 +609,15 @@ class DispatcherLoop:
             candidates.append(worker)
         if not candidates:
             LOG.debug(
-                "worker selection project=%s task=%s no candidates blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s",
+                "worker selection project=%s task=%s no candidates blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s blocked_type_mismatch=%s required_type=%s",
                 project_id,
                 task_type,
                 blocked_busy,
                 blocked_unhealthy,
                 blocked_rejected,
                 blocked_task_type,
+                blocked_type_mismatch,
+                required_worker_type,
             )
             return WorkerSelection(
                 worker=None,
@@ -608,7 +628,7 @@ class DispatcherLoop:
             )
         ordered = choose_worker(candidates, running_counts)
         LOG.debug(
-            "worker selection project=%s task=%s candidates=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s chosen=%s",
+            "worker selection project=%s task=%s candidates=%s blocked_busy=%s blocked_unhealthy=%s blocked_rejected=%s blocked_task_type=%s blocked_type_mismatch=%s required_type=%s chosen=%s",
             project_id,
             task_type,
             [f"{worker.name}({running_counts.get(worker.name, 0)}/{worker.max_running},p{worker.priority})" for worker in candidates],
@@ -616,6 +636,8 @@ class DispatcherLoop:
             blocked_unhealthy,
             blocked_rejected,
             blocked_task_type,
+            blocked_type_mismatch,
+            required_worker_type,
             ordered[0].name if ordered else None,
         )
         return WorkerSelection(

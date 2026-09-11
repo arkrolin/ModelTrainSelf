@@ -30,6 +30,7 @@ function mtsApp() {
     searchProviderId: '',         // '' = 宿主机环境变量
     agentActivity: [],            // agent 活动流
     activitySeq: 0,               // 已读到的最大 seq
+    _activityInFlight: false,     // 防止「刷新」与 tick 并发拉回重复 seq
 
     // ===== 图表 =====
     progressChart: null,
@@ -89,9 +90,19 @@ function mtsApp() {
       } else if (this.currentProject) {
         await this.loadGraph();
         await this.loadSearchStatus();
-        if (this.searchRunning && this.sideTab === 'log') this.loadLogs();
-        if (this.searchRunning && this.sideTab === 'activity') this.loadActivity();
+        // 活动流/日志都是后端的环形缓冲，调度停止后内容依然在。这里不能再加
+        // searchRunning 条件：conclude 阶段的事件恰好落在 running 翻成 false
+        // 前后，带上这个条件就会把最后那批（含结论 JSON）永久错过。
+        if (this.sideTab === 'log') this.loadLogs();
+        if (this.sideTab === 'activity') this.loadActivity();
       }
+    },
+
+    /** 切侧栏 tab：立刻拉一次，不然要等下一个 5s tick 才有内容。 */
+    setSideTab(tab) {
+      this.sideTab = tab;
+      if (tab === 'activity') this.loadActivity();
+      else if (tab === 'log') this.loadLogs();
     },
 
     // ===== API =====
@@ -132,6 +143,10 @@ function mtsApp() {
         this.view = 'detail';
         this.selectedNode = null;
         this.sideTab = 'detail';
+        // 活动流的 seq 是按项目计数的，换项目必须归零，否则新项目的低位 seq
+        // 会被上一个项目的高位 activitySeq 全部过滤掉。
+        this.agentActivity = [];
+        this.activitySeq = 0;
         this.applyGraph(data);
         await this.loadSearchStatus();
       } catch (_) { /* alert 已提示 */ }
@@ -145,6 +160,8 @@ function mtsApp() {
       this.hints = [];
       this.selectedNode = null;
       this.dispatchLog = '';
+      this.agentActivity = [];
+      this.activitySeq = 0;
       this.disposeChart();
       this.disposeGraph();
       this.loadProjects();
@@ -152,8 +169,13 @@ function mtsApp() {
 
     async loadGraph() {
       if (!this.currentProject) return;
+      const pid = this.currentProject.id;
       try {
-        const data = await this.api(`/api/projects/${this.currentProject.id}`, { silent: true });
+        const data = await this.api(`/api/projects/${pid}`, { silent: true });
+        // await 期间用户可能已经 backToList()（或换了项目）。此时容器已被 x-show
+        // 隐藏，继续 applyGraph 会在 0×0 容器上建出一个坏的 cytoscape 实例，
+        // 再次进入项目时 this.cy 非空 → 只走 updateGraph → 图永远不显示。
+        if (this.view !== 'detail' || this.currentProject?.id !== pid) return;
         this.currentProject = data.project || this.currentProject;
         this.applyGraph(data);
       } catch (_) { /* 轮询失败保留上次数据 */ }
@@ -161,15 +183,36 @@ function mtsApp() {
 
     applyGraph(data) {
       this.facts = data.facts || [];
-      this.intents = data.intents || [];
+      // 为每个 intent 计算 status 字段（后端不返回此字段）
+      this.intents = (data.intents || []).map(intent => ({
+        ...intent,
+        status: intent.concluded_at ? 'completed'
+              : intent.worker ? 'working'
+              : 'unclaimed'
+      }));
       this.hints = data.hints || [];
       this.renderProgressChart();
       // cytoscape 需要容器已经上屏才能量测尺寸，等 Alpine 渲染完再建图
       this.$nextTick(() => {
+        if (this.view !== 'detail') return;
         if (this.graphView !== 'graph') return;
-        if (this.cy) this.updateGraph();
-        else this.initGraph();
+        this.ensureGraph();
       });
+    },
+
+    /** 建图/更新图的唯一入口：顺带把 0 尺寸的坏实例回收重建。 */
+    ensureGraph() {
+      const container = document.getElementById('cy');
+      if (!container) return;
+      if (container.clientWidth === 0 || container.clientHeight === 0) return;
+      // 实例是在隐藏容器上建起来的（宽高为 0）→ 画布量测已经错了，只能重建。
+      if (this.cy && this.cy.width() === 0) this.disposeGraph();
+      if (this.cy) {
+        this.cy.resize();
+        this.updateGraph();
+      } else {
+        this.initGraph();
+      }
     },
 
     setGraphView(mode) {
@@ -177,13 +220,8 @@ function mtsApp() {
       this.graphView = mode;
       if (mode !== 'graph') return;
       this.$nextTick(() => {
-        if (this.cy) {
-          this.cy.resize();
-          this.updateGraph();
-          this.cy.fit(undefined, 50);
-        } else {
-          this.initGraph();
-        }
+        this.ensureGraph();
+        if (this.cy) this.cy.fit(undefined, 50);
       });
     },
 
@@ -400,6 +438,35 @@ function mtsApp() {
       } catch (_) { /* alert 已提示 */ }
     },
 
+    // ===== 从节点继续探索 =====
+    async createIntentFromFact(factId) {
+      if (!this.currentProject) return;
+      const fact = this.facts.find(f => f.id === factId);
+      if (!fact) return;
+
+      const description = prompt(
+        `从 ${factId} 继续探索\n\n请描述探索方向（例如：尝试更大的学习率、增加模型深度等）：`,
+        `基于 ${factId} 的结果，尝试进一步优化`
+      );
+
+      if (!description || !description.trim()) return;
+
+      try {
+        await this.api(`/api/projects/${this.currentProject.id}/intents`, {
+          method: 'POST',
+          body: JSON.stringify({
+            from: [factId],
+            description: description.trim(),
+            creator: 'human'
+          })
+        });
+        await this.loadGraph();
+        alert('✓ 已创建探索任务，调度器会自动分配 Agent 执行');
+      } catch (err) {
+        console.error('创建 intent 失败:', err);
+      }
+    },
+
     // ===== 搜索控制 =====
     async loadSearchStatus() {
       if (!this.currentProject) return;
@@ -424,24 +491,44 @@ function mtsApp() {
           `/api/projects/${this.currentProject.id}/search-config`,
           { silent: true }
         );
-        const payload = {
-          config: {
+
+        // 构建 payload：优先使用 worker_requirement（新格式），回退到 workers（旧格式）
+        const payload = { config: {} };
+
+        if (config.worker_requirement) {
+          // 新格式：使用 worker_requirement
+          payload.config = {
+            max_trials: config.max_trials || 12,
+            worker_requirement: {
+              worker_type: config.worker_requirement.worker_type,
+              count: config.worker_requirement.count,
+              provider_id: this.searchProviderId || config.worker_requirement.provider_id || null
+            }
+          };
+        } else if (config.workers && config.workers.length > 0) {
+          // 旧格式：使用 workers 数组
+          payload.config = {
             max_trials: config.max_trials || 12,
             max_workers: config.max_workers || 2,
-            workers: (config.workers || []).map(w => ({
+            workers: config.workers.map(w => ({
               name: w.name,
               driver: w.driver,
               provider_id: this.searchProviderId || w.provider_id || null
             }))
-          }
-        };
+          };
+        } else {
+          throw new Error('调度器配置不完整，请先配置项目设置');
+        }
+
         await this.api(`/api/projects/${this.currentProject.id}/dispatch/start`, {
           method: 'POST',
           body: JSON.stringify(payload)
         });
         this.searchRunning = true;
         await this.loadSearchStatus();
-      } catch (_) { /* alert 已提示 */ }
+      } catch (err) {
+        alert('启动失败: ' + (err.message || '未知错误'));
+      }
     },
 
     async stopSearch() {
@@ -471,21 +558,43 @@ function mtsApp() {
 
     async loadActivity() {
       if (!this.currentProject) return;
+      // 手动「刷新」和 5s tick 会并发，两个请求带同一个 after_seq 就会各拉回一份
+      // 相同事件，push 两次后 x-for 的 :key="ev.seq" 出现重复 key，渲染直接乱掉。
+      if (this._activityInFlight) return;
+      this._activityInFlight = true;
+      const pid = this.currentProject.id;
       try {
         const data = await this.api(
-          `/api/projects/${this.currentProject.id}/activity?after_seq=${this.activitySeq}&limit=200`,
+          `/api/projects/${pid}/activity?after_seq=${this.activitySeq}&limit=200`,
           { silent: true }
         );
-        if (data?.events && data.events.length > 0) {
-          this.agentActivity.push(...data.events);
-          // 保留最新 400 条，与后端 RING_SIZE 对齐
-          if (this.agentActivity.length > 400) {
-            this.agentActivity = this.agentActivity.slice(-400);
-          }
-          this.activitySeq = data.latest_seq || this.activitySeq;
+        // await 期间用户可能已经退出/切换项目，这批事件就不属于当前视图了
+        if (this.currentProject?.id !== pid) return;
+        const events = data?.events || [];
+        if (events.length === 0) return;
+        const seen = new Set(this.agentActivity.map(e => e.seq));
+        const fresh = events.filter(e => !seen.has(e.seq));
+        if (fresh.length === 0) return;
+        this.agentActivity.push(...fresh);
+        // 保留最新 400 条，与后端 RING_SIZE 对齐
+        if (this.agentActivity.length > 400) {
+          this.agentActivity = this.agentActivity.slice(-400);
+        }
+        // 按实际收到的最大 seq 推进，而不是后端的全局 latest_seq：limit 截断时
+        // 用 latest_seq 会把没拉到的那批事件永久跳过。
+        this.activitySeq = Math.max(
+          this.activitySeq,
+          ...events.map(e => e.seq || 0)
+        );
+        // 积压超过一个 limit 时后端会截断，续拉到追平，不用干等下一个 tick。
+        if ((data.latest_seq || 0) > this.activitySeq) {
+          this._activityInFlight = false;
+          await this.loadActivity();
         }
       } catch (_) {
         // 静默失败，不干扰主流程
+      } finally {
+        this._activityInFlight = false;
       }
     },
 
@@ -501,6 +610,19 @@ function mtsApp() {
           `/api/projects/${p.id}/search-config`, { silent: true }
         );
       } catch (_) { /* 拉不到就用下面的默认值 */ }
+
+      // 解析 worker_requirement，优先使用新格式
+      let workerType = 'claudecode';
+      let workerCount = 2;
+      if (cfg.worker_requirement) {
+        workerType = cfg.worker_requirement.worker_type || 'claudecode';
+        workerCount = cfg.worker_requirement.count || 2;
+      } else if (cfg.workers && cfg.workers.length > 0) {
+        // 兼容旧格式：从 workers 数组推断
+        workerType = cfg.workers[0].driver || 'mock';
+        workerCount = cfg.max_workers || cfg.workers.length;
+      }
+
       this.projectForm = {
         title: p.title || '',
         origin: p.origin || '',
@@ -511,42 +633,23 @@ function mtsApp() {
         budget_max_trials: p.budget_max_trials || 12,
         bootstrap_enabled: !!p.bootstrap_enabled,
         max_trials: cfg.max_trials || 12,
-        max_workers: cfg.max_workers || 2,
-        workers: (cfg.workers || []).map(w => ({
-          name: w.name || '', driver: w.driver || 'mock',
-          provider_id: w.provider_id || ''
-        }))
+        worker_type: workerType,
+        worker_count: workerCount
       };
       this.showProjectSettings = true;
     },
 
-    addProjectWorker() {
-      if (!this.projectForm) return;
-      const n = this.projectForm.workers.length + 1;
-      this.projectForm.workers.push(
-        { name: `worker-${n}`, driver: 'mock', provider_id: '' }
-      );
-    },
-
-    removeProjectWorker(idx) {
-      if (!this.projectForm) return;
-      this.projectForm.workers.splice(idx, 1);
-    },
 
     async saveProjectSettings() {
       if (!this.currentProject || !this.projectForm) return;
       const f = this.projectForm;
-      const workers = f.workers
-        .filter(w => (w.name || '').trim())
-        .map(w => ({
-          name: w.name.trim(),
-          driver: w.driver || 'mock',
-          provider_id: w.provider_id || null
-        }));
-      if (!workers.length) {
-        this.projectFormError = '至少需要一个 Worker，否则搜索无法启动';
+
+      // 验证必填字段
+      if (!f.worker_type || !f.worker_count || f.worker_count < 1) {
+        this.projectFormError = 'Worker 类型和数量必须填写';
         return;
       }
+
       const target = f.goal_target;
       this.projectFormSaving = true;
       this.projectFormError = '';
@@ -573,8 +676,10 @@ function mtsApp() {
             method: 'PUT',
             body: JSON.stringify({
               max_trials: Number(f.max_trials),
-              max_workers: Number(f.max_workers),
-              workers
+              worker_requirement: {
+                worker_type: f.worker_type,
+                count: Number(f.worker_count)
+              }
             })
           });
         this.showProjectSettings = false;
@@ -897,12 +1002,23 @@ function mtsApp() {
     },
 
     openIntentNodeLabel(intent) {
-      return this.isBootstrapIntent(intent) ? 'Bootstrap' : '?';
+      if (this.isBootstrapIntent(intent)) return 'Bootstrap';
+      // 显示 intent 的描述摘要
+      const text = (intent.description || '').replace(/\s+/g, ' ').trim();
+      const chars = Array.from(text);
+      return chars.length <= 40 ? text : `${chars.slice(0, 40).join('')}…`;
     },
 
     openIntentNodeSize(intent) {
       if (this.isBootstrapIntent(intent)) return { width: 82, height: 30 };
-      return { width: 22, height: 22 };
+      // intent 节点也使用动态尺寸，根据描述长度计算
+      const label = this.openIntentNodeLabel(intent);
+      const preset = { fontSize: 9, maxTextWidth: 140, minWidth: 80, minHeight: 32, padX: 10, padY: 8 };
+      const m = this.measureWrappedText(label, preset.maxTextWidth, preset.fontSize);
+      return {
+        width: Math.max(preset.minWidth, Math.ceil(m.width + preset.padX * 2)),
+        height: Math.max(preset.minHeight, Math.ceil(m.height + preset.padY * 2)),
+      };
     },
 
     edgeLabel(intent) {
@@ -953,6 +1069,9 @@ function mtsApp() {
       const container = document.getElementById('cy');
       if (!container || typeof cytoscape === 'undefined') return;
       if (this.cy) return;
+      // 容器被 x-show 隐藏时尺寸是 0×0，cytoscape 会建出一个量不到画布的实例，
+      // 之后即使容器显示出来也只是一片空白。宁可不建，等真正上屏再建。
+      if (container.clientWidth === 0 || container.clientHeight === 0) return;
       const { nodes, edges } = this.buildElements();
       const cy = cytoscape({
         container,
@@ -1002,8 +1121,8 @@ function mtsApp() {
         { selector: 'node[nodeType="goal"]', style: { ...box, 'background-color': '#f43f5e', 'font-size': '11px', 'text-max-width': '92px' }},
         { selector: 'node[nodeType="fact"]', style: { ...box, 'background-color': '#6366f1', 'font-size': '10px', 'text-max-width': '128px' }},
         { selector: 'node[nodeType="fact"][isBest=1]', style: { 'background-color': '#10b981', 'border-width': 2.5, 'border-color': '#047857' }},
-        { selector: 'node[nodeType="in_progress"]', style: { ...common, shape: 'ellipse', 'background-color': '#f59e0b', label: '?', color: '#fff', 'font-size': '11px', 'font-weight': 'bold', width: 22, height: 22, 'border-width': 2, 'border-color': '#d97706' }},
-        { selector: 'node[nodeType="unclaimed"]', style: { ...common, shape: 'ellipse', 'background-color': '#cbd5e1', 'background-opacity': 0.5, label: '?', color: '#94a3b8', 'font-size': '11px', 'font-weight': 'bold', width: 20, height: 20, 'border-width': 1.5, 'border-color': '#94a3b8', 'border-style': 'dashed' }},
+        { selector: 'node[nodeType="in_progress"]', style: { ...box, 'background-color': '#f59e0b', color: '#fff', 'font-size': '9px', 'text-max-width': '140px', 'border-width': 2, 'border-color': '#d97706' }},
+        { selector: 'node[nodeType="unclaimed"]', style: { ...box, 'background-color': '#e0e7ff', color: '#6366f1', 'font-size': '9px', 'text-max-width': '140px', 'border-width': 1.5, 'border-color': '#a5b4fc', 'border-style': 'dashed' }},
         { selector: 'node[nodeType="bootstrap_pending"]', style: { ...box, 'background-color': '#fff7ed', color: '#c2410c', 'font-size': '10px', 'border-width': 1.5, 'border-color': '#fdba74', 'border-style': 'dashed', 'text-max-width': '70px' }},
         { selector: 'node[nodeType="bootstrap_running"]', style: { ...box, 'background-color': '#fb923c', color: '#fff7ed', 'font-size': '10px', 'border-width': 2, 'border-color': '#ea580c', 'text-max-width': '70px' }},
 

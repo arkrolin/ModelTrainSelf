@@ -1,0 +1,58 @@
+# Quick test config — 极速测试，超时时间缩短到最小
+# 用于快速验证前端图谱和 Activity 功能
+
+server: "http://127.0.0.1:8000"
+
+runtime:
+  interval: 2
+  max_workers: 2
+  max_running_projects: 1
+  max_project_workers: 2
+  healthcheck_timeout: 1
+  worker_healthcheck: "startup_only"
+  execution: local
+  prompt_group: "mock"
+
+tasks:
+  bootstrap:
+    timeout: 5           # 5 秒超时
+    conclude_timeout: 3
+  reason:
+    timeout: 3
+    max_intents: 2       # 最多生成 2 个 intent
+  explore:
+    timeout: 5           # 5 秒超时
+    conclude_timeout: 3
+
+local:
+  completed_action: keep
+
+common_env: {}
+
+workers:
+  - name: "mock-a"
+    type: "mock"
+    task_types: [reason, explore, bootstrap]
+    max_running: 1
+    priority: 0
+    env:
+      # 所有延迟缩短到 1-3 秒，成功率提高
+      MOCK_HEALTHCHECK: '{"delay":[0,1],"outcomes":{"ok":1.0}}'
+      MOCK_BOOTSTRAP: '{"delay":[1,3],"outcomes":{"fact":0.9,"rejected":0.1}}'
+      MOCK_BOOTSTRAP_CONCLUDE: '{"delay":[1,2],"outcomes":{"fact":0.9,"rejected":0.1}}'
+      MOCK_REASON: '{"delay":[1,3],"outcomes":{"intent":0.8,"noop":0.2}}'
+      MOCK_EXPLORE_EXECUTE: '{"delay":[2,4],"outcomes":{"fact":0.9,"rejected":0.1}}'
+      MOCK_EXPLORE_CONCLUDE: '{"delay":[1,2],"outcomes":{"fact":0.9,"rejected":0.1}}'
+
+  - name: "mock-b"
+    type: "mock"
+    task_types: [reason, explore, bootstrap]
+    max_running: 1
+    priority: 0
+    env:
+      MOCK_HEALTHCHECK: '{"delay":[0,1],"outcomes":{"ok":1.0}}'
+      MOCK_BOOTSTRAP: '{"delay":[1,3],"outcomes":{"fact":0.9,"rejected":0.1}}'
+      MOCK_BOOTSTRAP_CONCLUDE: '{"delay":[1,2],"outcomes":{"fact":0.9,"rejected":0.1}}'
+      MOCK_REASON: '{"delay":[1,3],"outcomes":{"intent":0.8,"noop":0.2}}'
+      MOCK_EXPLORE_EXECUTE: '{"delay":[2,4],"outcomes":{"fact":0.9,"rejected":0.1}}'
+      MOCK_EXPLORE_CONCLUDE: '{"delay":[1,2],"outcomes":{"fact":0.9,"rejected":0.1}}'

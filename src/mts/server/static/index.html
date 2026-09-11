@@ -228,7 +228,7 @@
     <span class="text-indigo-500" x-text="`${searchStatus?.active_agents || 0} 个 Agent 在跑`"></span>
     <span class="text-indigo-400" x-text="formatElapsed(searchStatus?.elapsed_sec)"></span>
     <div class="flex-1"></div>
-    <button @click="sideTab = 'log'" class="text-indigo-600 hover:text-indigo-800 font-medium">查看日志 →</button>
+    <button @click="setSideTab('log')" class="text-indigo-600 hover:text-indigo-800 font-medium">查看日志 →</button>
   </div>
 
   <div class="flex-1 flex overflow-hidden">
@@ -421,11 +421,11 @@
           :class="sideTab === 'timeline' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
           时间线
         </button>
-        <button @click="sideTab = 'activity'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+        <button @click="setSideTab('activity')" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'activity' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
           Agent
         </button>
-        <button @click="sideTab = 'log'" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
+        <button @click="setSideTab('log')" class="flex-1 px-3 py-2.5 text-xs font-medium transition"
           :class="sideTab === 'log' ? 'text-indigo-600 border-b-2 border-indigo-500' : 'text-slate-400 hover:text-slate-600'">
           日志
         </button>
@@ -534,6 +534,20 @@
               <div x-show="selectedFact.trial_id" class="text-xs text-slate-500">
                 <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">试验标识</h4>
                 <span class="font-mono text-slate-700" x-text="selectedFact.trial_id"></span>
+              </div>
+
+              <!-- 从此节点继续探索 -->
+              <div x-show="selectedFact.id !== 'origin' && selectedFact.id !== 'goal'" class="pt-3 border-t border-slate-200">
+                <button @click="createIntentFromFact(selectedFact.id)"
+                  class="w-full px-4 py-2.5 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600 transition flex items-center justify-center gap-2">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                  </svg>
+                  从此处继续探索
+                </button>
+                <p class="text-xs text-slate-400 mt-2 text-center">
+                  将创建一个新的 intent，从此节点开始探索
+                </p>
               </div>
             </div>
           </template>
@@ -917,60 +931,34 @@
 
       <div class="pt-4 border-t border-slate-200">
         <h4 class="text-sm font-semibold text-slate-700 mb-1">搜索配置</h4>
-        <p class="text-xs text-slate-400 mb-3">调度器每轮并发多少 Agent、最多跑多少次实验</p>
+        <p class="text-xs text-slate-400 mb-3">配置实验次数和 Worker 需求</p>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-3 gap-3">
           <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">单轮实验上限</label>
+            <label class="block text-xs text-slate-600 mb-1">实验上限</label>
             <input type="number" min="1" max="1000" x-model="projectForm.max_trials"
               class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
           </div>
           <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">并发 Worker 数</label>
-            <input type="number" min="1" max="32" x-model="projectForm.max_workers"
+            <label class="block text-xs text-slate-600 mb-1">Worker 类型</label>
+            <select x-model="projectForm.worker_type"
+              class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
+              <option value="claudecode">claudecode</option>
+              <option value="mock">mock</option>
+              <option value="llm">llm</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-600 mb-1">Worker 数量</label>
+            <input type="number" min="1" max="32" x-model="projectForm.worker_count"
               class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
           </div>
         </div>
-      </div>
 
-      <!-- Worker 名册 -->
-      <div>
-        <div class="flex items-center justify-between mb-1.5">
-          <label class="text-sm font-medium text-slate-700">Worker 名册</label>
-          <button type="button" @click="addProjectWorker()"
-            class="text-xs text-indigo-600 hover:text-indigo-700 font-medium">+ 添加</button>
-        </div>
-        <p class="text-xs text-slate-400 mb-2">
-          driver 选 <span class="font-mono">mock</span> 时不调用真实 LLM，用来验证链路；
-          其他 driver 才会用下面选的端点
+        <p class="text-xs text-slate-400 mt-2">
+          调度器会从配置的 Worker 池中自动分配匹配类型的 Workers。
+          <span class="font-mono text-slate-500">mock</span> 用于测试，不调用真实 LLM。
         </p>
-
-        <div class="space-y-1.5">
-          <template x-for="(w, idx) in projectForm.workers" :key="idx">
-            <div class="flex items-center gap-1.5">
-              <input x-model="w.name" placeholder="worker 名称"
-                class="flex-1 min-w-0 px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
-              <select x-model="w.driver"
-                class="px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-600 bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none">
-                <option value="mock">mock</option>
-                <option value="claudecode">claudecode</option>
-                <option value="llm">llm</option>
-              </select>
-              <select x-model="w.provider_id" :disabled="w.driver === 'mock'"
-                class="px-2 py-1.5 border border-slate-300 rounded-lg text-xs text-slate-600 bg-white focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none max-w-[150px] disabled:bg-slate-50 disabled:text-slate-400">
-                <option value="">端点: 默认/环境变量</option>
-                <template x-for="p in providers" :key="p.id">
-                  <option :value="p.id" x-text="p.name"></option>
-                </template>
-              </select>
-              <button type="button" @click="removeProjectWorker(idx)"
-                x-show="projectForm.workers.length > 1"
-                class="px-2 text-slate-300 hover:text-red-400 transition shrink-0">&times;</button>
-            </div>
-          </template>
-        </div>
-        <p x-show="!projectForm.workers.length" x-cloak
-          class="text-xs text-red-500 mt-1.5">至少需要一个 Worker，否则搜索无法启动</p>
       </div>
     </div>
 

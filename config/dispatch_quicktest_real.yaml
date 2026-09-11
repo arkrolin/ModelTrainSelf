@@ -1,0 +1,45 @@
+# Quick test config — 使用真实 Claude Code，但任务轻量化
+# 用于快速测试前端图谱和 Activity 功能
+
+server: "http://127.0.0.1:8765"
+
+runtime:
+  interval: 3
+  max_workers: 2
+  max_running_projects: 1
+  max_project_workers: 2
+  healthcheck_timeout: 3
+  worker_healthcheck: "startup_only"
+  execution: local
+  prompt_group: "default"
+
+tasks:
+  bootstrap:
+    timeout: 120         # 2 分钟（真实 agent 需要时间思考）
+    conclude_timeout: 60
+  reason:
+    timeout: 90
+    max_intents: 2       # 只生成 2 个 intent
+  explore:
+    timeout: 180         # 3 分钟（比默认短很多）
+    conclude_timeout: 60
+
+local:
+  completed_action: keep
+
+common_env: {}
+
+workers:
+  - name: "claude-a"
+    type: "claudecode"
+    task_types: [reason, explore, bootstrap]
+    max_running: 1
+    priority: 0
+    env: {}
+
+  - name: "claude-b"
+    type: "claudecode"
+    task_types: [reason, explore, bootstrap]
+    max_running: 1
+    priority: 0
+    env: {}

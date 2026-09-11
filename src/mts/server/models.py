@@ -75,6 +75,7 @@ class ProjectMeta(BaseModel):
     budget_max_trials: int
     created_at: str
     reason: ProjectReason | None = None
+    search_config: "SearchConfigOut | None" = None
 
 
 class ProjectSummary(ProjectMeta):
@@ -273,13 +274,23 @@ class ObservationOut(BaseModel):
     created_at: str
 
 
-class WorkerSpec(BaseModel):
-    """One entry in a project's worker roster.
+class WorkerRequirement(BaseModel):
+    """Worker requirement specified by a project.
 
-    Still no credential fields: a roster row references a provider by id, and the
-    dispatcher resolves the secret out of the `providers` table at launch time.
-    Leave provider_id unset to fall back to the host environment (the original
-    behaviour), or to use the default provider when one is marked.
+    Projects specify what type of worker they need and how many,
+    the dispatcher will automatically assign matching workers from its pool.
+    """
+
+    worker_type: str = Field(default="claudecode", description="Worker type: claudecode, mock, etc.")
+    count: int = Field(default=2, ge=1, le=32, description="Number of workers needed")
+    provider_id: str | None = Field(default=None, description="Optional: use a specific provider")
+
+
+class WorkerSpec(BaseModel):
+    """DEPRECATED: Legacy format for backward compatibility.
+
+    One entry in a project's worker roster. This is kept for migration purposes.
+    New code should use WorkerRequirement instead.
     """
 
     name: str
@@ -288,15 +299,23 @@ class WorkerSpec(BaseModel):
 
 
 class SearchConfigIn(BaseModel):
-    """Search settings a user configures in the WebUI, replacing dispatch*.yaml.
+    """Search settings a user configures in the WebUI.
 
-    No seed or backend: agents write their own train.py, so the server does not
-    own the training loop that those two used to parameterise.
+    Projects specify worker requirements (type + count), and the dispatcher
+    automatically assigns matching workers from its YAML-configured pool.
     """
 
     max_trials: int = Field(default=12, ge=1, le=1000)
-    max_workers: int = Field(default=2, ge=1, le=32)
-    workers: list[WorkerSpec] = Field(default_factory=list)
+    # Defaults to None, not WorkerRequirement(): the dispatcher reads this as a hard
+    # constraint and filters its worker pool by worker_type. With a default_factory a
+    # project that never saved a config would still claim to require claudecode, which
+    # silently filters out every other worker in the pool and starves dispatch.
+    # None == "no preference, any worker in the pool will do".
+    worker_requirement: WorkerRequirement | None = None
+
+    # Legacy field for backward compatibility
+    max_workers: int | None = Field(default=None, ge=1, le=32, deprecated=True)
+    workers: list[WorkerSpec] = Field(default_factory=list, deprecated=True)
 
 
 class SearchConfigOut(SearchConfigIn):

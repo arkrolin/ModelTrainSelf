@@ -23,6 +23,25 @@ MTS 的解法是：把这个循环变成一台**有分工、有调度、有记�
 
 ---
 
+## 文档导航
+
+| 文档 | 内容 | 什么时候读 |
+|------|------|-----------|
+| [01-架构设计](docs/01-架构设计.md) | 一句话理解、五层角色、核心概念、三段式流程、调度与关键设计原则 | **第一个读** |
+| [02-领域模型与搜索空间](docs/02-领域模型与搜索空间.md) | 状态空间的轴定义、Fact/Trial/Probe/Diagnostic/Lesson 实体、血缘与 diff | 想搞清楚"搜的是什么" |
+| [03-模块设计](docs/03-模块设计.md) | 目录结构、每个模块的职责边界、关键类与函数签名、依赖关系 | 要动手改代码 |
+| [04-数据契约与存储](docs/04-数据契约与存储设计.md) | SQLite schema、训练产物 JSON/JSONL schema、REST API 全表 | 要接接口 / 加字段 |
+| [05-Agent协作协议与Prompt设计](docs/05-Agent协作协议与Prompt设计.md) | 三段式 prompt、输出 JSON 契约、知识库读写协议、防跑偏约束 | 要调 Agent 行为 |
+| [06-可视化与WebUI设计](docs/06-可视化与WebUI设计.md) | 看板布局、图表选型、交互流程 | 要做前端 |
+| [07-MVP范围与实施计划](docs/07-MVP范围与实施计划.md) | 里程碑、验收标准、风险与取舍 | 要看进度和边界 |
+| [08-心跳与长时间任务](docs/08-心跳与长时间任务.md) | 训练任务的心跳/租约、checkpoint/续跑、早停、GPU 预算 | 要跑长时间真实训练 |
+| [09-多Agent并行与资源调度](docs/09-多Agent并行与资源调度.md) | 真并行多 Agent、GPU 资源队列、worker 健康/退避（P2 设计） | 要上多 GPU / 真并行 |
+| [10-迭代探测报告](docs/10-迭代探测报告.md) | 相对 Cairn/Luan 的缺失结构清单 + 迭代优先级 | 要规划后续迭代 |
+
+---
+
+## 快速开始
+
 ### 方式一：演示模式（推荐首次体验）
 
 ```bash
@@ -34,7 +53,6 @@ cd /root/work/nlp/xjzhao13/lijie_llama/MolelTrainSelf/ModelTrainSelf
 ```
 
 演示模式会：
-
 - 自动创建一个示例项目（字符级语言模型训练）
 - 启动 Web 界面在 http://127.0.0.1:8765
 - 预设 20 次实验预算
@@ -52,8 +70,6 @@ cd /root/work/nlp/xjzhao13/lijie_llama/MolelTrainSelf/ModelTrainSelf
 ---
 
 ### 可能的风险
-
 为了给 Claude 子进程随意探索模型架构的自由度，MTS 目前没有对训练任务做任何限制。请确保：
-
 - 训练任务不会占满 GPU 内存（否则会导致整个服务器挂掉）
 - 会默认使用 claude 的 --dangerously-skip-permissions 参数，如果使用root权限需要小心
