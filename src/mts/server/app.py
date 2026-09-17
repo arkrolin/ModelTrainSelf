@@ -49,6 +49,20 @@ def create_app(root: str | Path | None = None, db_path: str | Path | None = None
 
     app = FastAPI(title="ModelTrainSelf Board", version="0.1.0")
 
+    # DispatcherManager 按 app 实例持有，不用模块级单例：单例只在第一次调用时绑定
+    # service/root，之后 create_app 再建的 app 拿到的还是第一个的 manager —— 于是
+    # 「启动搜索」会写到另一个库、另一个 runs 目录去。
+    _mgr_holder: dict[str, Any] = {}
+
+    def dispatcher_manager():
+        mgr = _mgr_holder.get("mgr")
+        if mgr is None:
+            from mts.server.dispatcher_manager import DispatcherManager
+
+            mgr = DispatcherManager(service, root)
+            _mgr_holder["mgr"] = mgr
+        return mgr
+
     def require_active_project(pid: str) -> None:
         """404 when the project is unknown, 403 when it is not active.
 
@@ -133,15 +147,29 @@ def create_app(root: str | Path | None = None, db_path: str | Path | None = None
 
     @app.delete("/api/projects/{pid}")
     def delete_project(pid: str):
-        """删除项目及其所有关联数据。"""
+        """删除项目及其所有关联数据，并停掉它还在跑的调度器。"""
         proj = service.get_project(pid)
         if proj is None:
             raise HTTPException(404, "project not found")
+
+        # 先停调度：行删掉之后循环还活着，它会继续给这个项目派 agent，然后每一次
+        # claim/heartbeat 都撞 404。停在删除之前，任务才能收到取消信号正常收尾。
+        mgr = dispatcher_manager()
+        try:
+            mgr.stop(pid)
+        except RuntimeError:
+            pass  # 本来就没在跑
 
         # 删除数据库记录
         success = service.delete_project(pid)
         if not success:
             raise HTTPException(500, "failed to delete project")
+
+        # 释放项目的 activity 环形缓冲和调度记录，否则进程一直留着已删项目的内存。
+        from mts.dispatcher.runtime.activity import get_activity_bus
+
+        get_activity_bus().clear(pid)
+        mgr.forget(pid)
 
         return {"ok": True, "id": pid}
 
@@ -483,9 +511,7 @@ def create_app(root: str | Path | None = None, db_path: str | Path | None = None
     @app.post("/api/projects/{pid}/dispatch/start")
     def start_dispatch(pid: str, payload: DispatchStart):
         """启动搜索任务（异步后台运行）。"""
-        from mts.server.dispatcher_manager import get_dispatcher_manager
-
-        mgr = get_dispatcher_manager(service, root)
+        mgr = dispatcher_manager()
         try:
             run_id = mgr.start(pid, payload.config)
             return {"run_id": run_id, "status": "running"}
@@ -497,9 +523,7 @@ def create_app(root: str | Path | None = None, db_path: str | Path | None = None
     @app.post("/api/projects/{pid}/dispatch/stop")
     def stop_dispatch(pid: str):
         """停止正在运行的搜索任务。"""
-        from mts.server.dispatcher_manager import get_dispatcher_manager
-
-        mgr = get_dispatcher_manager(service, root)
+        mgr = dispatcher_manager()
         try:
             mgr.stop(pid)
             return {"status": "stopped"}
@@ -509,18 +533,12 @@ def create_app(root: str | Path | None = None, db_path: str | Path | None = None
     @app.get("/api/projects/{pid}/dispatch/status")
     def dispatch_status(pid: str):
         """查询搜索任务状态。"""
-        from mts.server.dispatcher_manager import get_dispatcher_manager
-
-        mgr = get_dispatcher_manager(service, root)
-        return mgr.status(pid)
+        return dispatcher_manager().status(pid)
 
     @app.get("/api/projects/{pid}/dispatch/logs")
     def dispatch_logs(pid: str, limit: int = 100):
         """获取搜索任务日志（最新 limit 条）。"""
-        from mts.server.dispatcher_manager import get_dispatcher_manager
-
-        mgr = get_dispatcher_manager(service, root)
-        return mgr.logs(pid, limit)
+        return dispatcher_manager().logs(pid, limit)
 
     @app.get("/api/projects/{pid}/activity")
     def get_activity(pid: str, after_seq: int = 0, limit: int = 200):

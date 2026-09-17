@@ -21,6 +21,7 @@ from typing import Any
 import yaml
 
 from mts.dispatcher.config import DispatchConfig
+from mts.dispatcher.runtime.activity import get_activity_bus
 from mts.dispatcher.scheduler.loop import DispatcherLoop
 from mts.server.models import SearchConfigIn
 from mts.server.services import Service
@@ -34,6 +35,22 @@ DEFAULT_TASKS: dict[str, dict[str, int]] = {
     "reason": {"timeout": 600, "max_intents": 3},
     "explore": {"timeout": 7200, "conclude_timeout": 600},
 }
+
+
+# 每个 driver 能用哪些 provider kind。不匹配的组合不是"配置得差一点"，而是凭证
+# 注入到了错误的环境变量上：kind=openai 的端点被塞进 ANTHROPIC_BASE_URL，claude
+# CLI 拿着一个 OpenAI 协议地址去调，必然失败——而且要等满 bootstrap 的 1800s
+# 超时才暴露出来。所以在启动前就要拦住。
+_DRIVER_PROVIDER_KINDS: dict[str, frozenset[str]] = {
+    "claudecode": frozenset({"anthropic", "claudecode"}),
+    "llm": frozenset({"openai", "anthropic"}),
+}
+
+
+def provider_kind_matches(driver: str, kind: str) -> bool:
+    """driver 能否使用这种 kind 的 provider。未知 driver 一律放行。"""
+    allowed = _DRIVER_PROVIDER_KINDS.get(driver)
+    return True if allowed is None else kind in allowed
 
 
 def provider_env(provider: dict[str, Any] | None, driver: str) -> dict[str, str]:
@@ -125,6 +142,16 @@ def build_dispatch_config(
         env = {}
         if resolve_provider is not None and req.worker_type != "mock":
             provider = resolve_provider(req.provider_id)
+            if provider is not None:
+                kind = provider.get("kind") or "openai"
+                if not provider_kind_matches(req.worker_type, kind):
+                    raise RuntimeError(
+                        f"provider '{provider.get('name') or provider.get('id')}' is kind="
+                        f"{kind}, which worker_type={req.worker_type} cannot use. "
+                        f"Pick a provider of kind "
+                        f"{'/'.join(sorted(_DRIVER_PROVIDER_KINDS[req.worker_type]))}, "
+                        f"or change the project's worker type."
+                    )
             env = provider_env(provider, req.worker_type)
         # 项目只声明「要几个什么类型的 worker」，名字由这里合成。
         for i in range(max_workers):
@@ -223,7 +250,16 @@ class DispatcherManager:
             # 提前校验，让配置错误在 HTTP 400 里回给前端而不是死在后台线程。
             DispatchConfig.load(config_path)
 
-            loop = DispatcherLoop(config_path)
+            # 按项目起的循环只许调度这个项目：WebUI 每个项目一个 DispatcherManager
+            # entry，不收窄的话两个项目各点一次「启动搜索」就会互相抢 intent。
+            loop = DispatcherLoop(config_path, project_id=project_id)
+
+            # 活动流按项目留在环形缓冲里，跨 run 不会自己消失。不清的话新一轮的
+            # 界面开头挂的是上一轮的 agent 事件，看起来像新 run 一启动就干完了活。
+            # 清掉同时把 seq 归零，所以前端 startSearch 也要跟着重置 activitySeq，
+            # 否则新一轮的低位 seq 会被旧的高水位全部过滤掉。
+            get_activity_bus().clear(project_id)
+
             run_id = f"run_{self.service.next_trial_id(project_id)}"
             logs: deque[str] = deque(maxlen=LOG_RING_SIZE)
             handler = _RingHandler(logs)
@@ -273,6 +309,19 @@ class DispatcherManager:
             entry["error"] = error
             handler = entry.pop("handler", None)
             entry["logs"].append(f"dispatcher {status}" + (f": {error}" if error else ""))
+        if handler is not None:
+            logging.getLogger("mts.dispatcher").removeHandler(handler)
+
+    def forget(self, project_id: str) -> None:
+        """丢掉项目的调度记录。项目被删除时用，不是 stop 的替代。
+
+        必须自己摘掉日志 handler：后台线程收尾时调的 `_finish` 找不到记录会直接
+        返回，handler 就一直挂在 mts.dispatcher logger 上，继续往一个没人再读的
+        队列里写。
+        """
+        with self._lock:
+            entry = self._active.pop(project_id, None)
+            handler = entry.pop("handler", None) if entry else None
         if handler is not None:
             logging.getLogger("mts.dispatcher").removeHandler(handler)
 
@@ -340,13 +389,17 @@ class DispatcherManager:
         return path
 
 
-# 全局单例
 _manager: DispatcherManager | None = None
 _manager_lock = threading.Lock()
 
 
 def get_dispatcher_manager(service: Service, root: Path, *, server: str | None = None) -> DispatcherManager:
-    """获取全局 DispatcherManager 单例。"""
+    """DEPRECATED：进程级单例，只在第一次调用时绑定 service/root。
+
+    `create_app` 现在自己持有 manager（app.py:dispatcher_manager），因为同进程建
+    第二个 app（测试、`mts demo` 后再 `mts serve`）时这里会把第一个 app 的库和
+    runs 目录交给第二个 app 用。保留此函数仅为兼容外部调用方。
+    """
     global _manager
     with _manager_lock:
         if _manager is None:

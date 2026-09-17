@@ -44,6 +44,11 @@ class Intent(BaseModel):
     last_heartbeat_at: str | None = None
     created_at: str
     concluded_at: str | None = None
+    # 派生字段，由 services.get_intent 从 to_fact_id/worker 算出来，不落库。
+    # 写进模型是因为前端直接读它：这个模型现在没挂在任何 response_model 上，
+    # 但 ProjectDetail.intents 是它，谁哪天给端点加上 response_model，缺这行
+    # 就会把字段静默剥掉，前端的状态标签跟着一起空。
+    status: Literal["unclaimed", "working", "concluded"] | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -321,6 +326,9 @@ class SearchConfigIn(BaseModel):
 class SearchConfigOut(SearchConfigIn):
     project_id: str
     updated_at: str | None = None
+    # False = 这个项目从没保存过配置，下面这些值是 mock 默认值。前端据此提示用户
+    # 先配置，而不是拿 mock 跑出一批假 fact。
+    configured: bool = False
 
 
 class DispatchStart(BaseModel):

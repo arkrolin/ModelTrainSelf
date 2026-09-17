@@ -680,18 +680,26 @@ class Service:
     }
 
     def get_search_config(self, pid: str) -> dict[str, Any]:
-        """Stored config, or the defaults when the project has never been configured."""
+        """Stored config, or the defaults when the project has never been configured.
+
+        `configured` tells the two apart. The defaults are a **mock** roster, which
+        runs fake agents that write fake metrics into the fact graph and burn the
+        trial budget doing it — so a caller that means "run for real" has to be able
+        to see that nothing was ever saved, instead of silently getting mock.
+        """
         row = self.db.fetchone(
             "SELECT * FROM search_configs WHERE project_id=?", (pid,)
         )
         if row is None:
-            return {"project_id": pid, "updated_at": None, **self._SEARCH_DEFAULTS}
+            return {"project_id": pid, "updated_at": None, "configured": False,
+                    **self._SEARCH_DEFAULTS}
         row["workers"] = self.db.json_loads(row["workers"], [])
         if not row["workers"]:
             row["workers"] = list(self._SEARCH_DEFAULTS["workers"])
         # Parse worker_requirement JSON if present
         if row.get("worker_requirement"):
             row["worker_requirement"] = self.db.json_loads(row["worker_requirement"], None)
+        row["configured"] = True
         return row
 
     def put_search_config(self, pid: str, payload: Any) -> dict[str, Any]:

@@ -210,6 +210,10 @@ class Database:
                 ("trials", "progress_max_steps", "INTEGER"),
                 ("trials", "eta_sec", "REAL"),
                 ("trials", "queued_at", "TEXT"),
+                # worker_requirement 是后加的列。CREATE TABLE IF NOT EXISTS 对已存在
+                # 的表不会补列，所以少了这一行，任何在它之前建的库都会在
+                # put_search_config 上抛 OperationalError（保存项目配置直接 500）。
+                ("search_configs", "worker_requirement", "TEXT"),
             ]:
                 cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
                 if col not in cols:

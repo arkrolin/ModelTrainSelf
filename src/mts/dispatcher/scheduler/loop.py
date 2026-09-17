@@ -40,8 +40,10 @@ class WorkerSelection:
 
 
 class DispatcherLoop:
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, *, project_id: str | None = None):
         self.config_path = config_path
+        # 只调度这一个项目；None = 调度 board 上所有 active 项目（CLI 的行为）。
+        self.project_id = project_id
         self.config = DispatchConfig.load(config_path)
         self.client = MTSClient(self.config.server)
         self.container_manager = LocalBackend(self.config.local or LocalConfig())
@@ -63,6 +65,18 @@ class DispatcherLoop:
         # tasks, but without this flag `run()` is a `while True` that keeps polling
         # the board forever, so the loop never actually exits.
         self._stop_requested = threading.Event()
+
+    def _scoped(self, summaries: list[ProjectSummary]) -> list[ProjectSummary]:
+        """把 board 上的项目收窄到本循环负责的那一个。
+
+        WebUI 的「启动搜索」是按项目发起的，但 DispatcherLoop 本身是从
+        `list_projects()` 全量拉取的：不过滤的话，为 proj_004 起的循环会照样
+        去派发 proj_001 —— 用另一个项目的 worker 配置和预算跑别人的 intent。
+        `project_id is None` 保留 CLI `mts dispatch` 的全局行为。
+        """
+        if self.project_id is None:
+            return summaries
+        return [summary for summary in summaries if summary.id == self.project_id]
 
     def request_stop(self) -> None:
         """Ask `run()` to exit at the next loop boundary. Safe from another thread."""
@@ -94,7 +108,7 @@ class DispatcherLoop:
                         self._settings_checked = True
                     self._reap_futures()
                     self._reap_cleanup_futures()
-                    summaries = self.client.list_projects()
+                    summaries = self._scoped(self.client.list_projects())
                     self._initialize_reason_checkpoints(summaries)
                     self._refresh_runtime_projects(summaries)
                     self._cancel_inactive_tasks(summaries)

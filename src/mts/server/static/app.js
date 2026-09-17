@@ -183,12 +183,17 @@ function mtsApp() {
 
     applyGraph(data) {
       this.facts = data.facts || [];
-      // 为每个 intent 计算 status 字段（后端不返回此字段）
+      // 后端已经在 services.get_intent 里算好 status 了（unclaimed / working /
+      // concluded），直接用它。这里原本自己按 concluded_at 又算了一遍，同一个
+      // 状态在后端叫 concluded、在前端叫 completed —— 现在时间线把 status 当标签
+      // 显示，这种分歧会直接漏到界面上。只留后端那一套命名。
+      // 兜底是为了老响应里没有 status 的情况，不是第二套真源。
       this.intents = (data.intents || []).map(intent => ({
         ...intent,
-        status: intent.concluded_at ? 'completed'
-              : intent.worker ? 'working'
-              : 'unclaimed'
+        status: intent.status
+              || (intent.concluded_at ? 'concluded'
+                : intent.worker ? 'working'
+                : 'unclaimed')
       }));
       this.hints = data.hints || [];
       this.renderProgressChart();
@@ -383,28 +388,41 @@ function mtsApp() {
       }));
     },
 
+    // 字段名必须和模板（index.html 的时间线 template）对齐：那边读的是
+    // key / label / at / description。之前这里产出的是 created_at 和一个后端
+    // 根本没有的 i.title，于是每一条时间线都是空 id 标签、空描述、时间显示
+    // 「-」，:key 还全是 undefined。hints 同理：模板早就为它备好了 amber 配色
+    // 分支，但这里从来没往 events 里放过 hint。
     timelineEvents() {
       const events = [];
       this.facts.forEach(f => {
         events.push({
-          type: 'fact', id: f.id, description: f.description,
-          created_at: f.created_at, status: null
+          key: `fact_${f.id}`, type: 'fact', id: f.id, label: 'fact',
+          description: f.description, at: f.created_at, status: null
         });
       });
       this.intents.forEach(i => {
         events.push({
-          type: 'intent', id: i.id, description: i.title,
-          created_at: i.created_at, status: i.status
+          key: `intent_${i.id}`, type: 'intent', id: i.id,
+          // intent 没有标题，描述就是它自己
+          label: i.status || 'intent', description: i.description,
+          at: i.created_at, status: i.status
         });
       });
-      return events.sort((a, b) =>
-        new Date(b.created_at || 0) - new Date(a.created_at || 0)
-      );
+      this.hints.forEach(h => {
+        events.push({
+          key: `hint_${h.id}`, type: 'hint', id: h.id, label: 'hint',
+          description: h.content, at: h.created_at, status: null
+        });
+      });
+      return events.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
     },
 
     selectTimelineEvent(evt) {
       if (evt.type === 'fact') this.selectFact(evt.id);
-      else this.selectIntent(evt.id);
+      else if (evt.type === 'intent') this.selectIntent(evt.id);
+      // hint 没有图谱节点可选中，跳到「提示」页签比点了没反应好。
+      else this.sideTab = 'hints';
     },
 
     // ===== 提示管理 =====
@@ -492,6 +510,18 @@ function mtsApp() {
           { silent: true }
         );
 
+        // 从未保存过配置时，后端回的是 mock 默认值。直接拿它启动会跑出一批假
+        // agent、假指标，还照样吃掉实验预算，所以这里必须先问一句。
+        if (config.configured === false) {
+          const ok = confirm(
+            '这个项目还没有保存过搜索配置。\n\n' +
+            '现在启动会使用 mock worker：不调用真实 LLM，产出的是假指标，' +
+            '但仍然会写入知识图谱并消耗实验预算。\n\n' +
+            '建议先打开「项目配置」选好 Worker 类型。仍要用 mock 启动吗？'
+          );
+          if (!ok) return;
+        }
+
         // 构建 payload：优先使用 worker_requirement（新格式），回退到 workers（旧格式）
         const payload = { config: {} };
 
@@ -524,6 +554,11 @@ function mtsApp() {
           method: 'POST',
           body: JSON.stringify(payload)
         });
+        // start 那边会清掉这个项目的活动流环形缓冲（seq 归零），这里必须同步把
+        // 本地已读水位也归零：不归零的话新一轮的低位 seq 全部小于 activitySeq，
+        // 会被增量拉取整段过滤掉，界面上就是活动流永远空着。
+        this.agentActivity = [];
+        this.activitySeq = 0;
         this.searchRunning = true;
         await this.loadSearchStatus();
       } catch (err) {
@@ -614,13 +649,18 @@ function mtsApp() {
       // 解析 worker_requirement，优先使用新格式
       let workerType = 'claudecode';
       let workerCount = 2;
+      // provider_id 这个表单里没有对应控件（端点在顶栏按次选），但必须读出来带回去：
+      // PUT 是整份覆盖，不回填就等于把用户存过的端点静默清空。
+      let workerProviderId = null;
       if (cfg.worker_requirement) {
         workerType = cfg.worker_requirement.worker_type || 'claudecode';
         workerCount = cfg.worker_requirement.count || 2;
+        workerProviderId = cfg.worker_requirement.provider_id || null;
       } else if (cfg.workers && cfg.workers.length > 0) {
         // 兼容旧格式：从 workers 数组推断
         workerType = cfg.workers[0].driver || 'mock';
         workerCount = cfg.max_workers || cfg.workers.length;
+        workerProviderId = cfg.workers[0].provider_id || null;
       }
 
       this.projectForm = {
@@ -632,9 +672,12 @@ function mtsApp() {
         goal_target: p.goal_target,
         budget_max_trials: p.budget_max_trials || 12,
         bootstrap_enabled: !!p.bootstrap_enabled,
+        // 同 provider_id：控件已撤（这个字段调度器根本不读，见 index.html 的注释），
+        // 但 PUT 是整份覆盖，所以照样要读出来带回去，别把库里存着的值改掉。
         max_trials: cfg.max_trials || 12,
         worker_type: workerType,
-        worker_count: workerCount
+        worker_count: workerCount,
+        worker_provider_id: workerProviderId
       };
       this.showProjectSettings = true;
     },
@@ -678,7 +721,8 @@ function mtsApp() {
               max_trials: Number(f.max_trials),
               worker_requirement: {
                 worker_type: f.worker_type,
-                count: Number(f.worker_count)
+                count: Number(f.worker_count),
+                provider_id: f.worker_provider_id || null
               }
             })
           });

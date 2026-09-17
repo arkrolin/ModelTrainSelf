@@ -44,8 +44,23 @@ def run_demo(port: int, trials: int, keep: bool, open_browser: bool) -> None:
         origin_spec = "(no baseline spec on disk; agents should define one)"
         print(f"[demo] baseline spec not found at {BASELINE_SPEC}")
 
+    # `mts demo` 复用同名项目，不每次新建一个：demo 用的是 cwd 下那个持久的
+    # data/board.db，反复跑（quicktest.sh 就是这么用的）会堆出一串一模一样的
+    # active 项目，CLI `mts dispatch` 会在它们之间轮流派发。
+    title = "字符级语言模型训练状态空间搜索"
+    existing = next((p for p in service.list_projects() if p["title"] == title), None)
+    if existing is not None:
+        project = existing
+        if project["budget_max_trials"] != trials:
+            project = service.update_project(project["id"], {"budget_max_trials": trials})
+        print(f"[demo] reusing project={project['id']} title={project['title']}")
+        print(f"[demo] budget: {trials} trials")
+        print("[demo] explore it with: mts dispatch --config config/dispatch_mock.yaml")
+        _serve(root, port, open_browser)
+        return
+
     project = service.create_project(ProjectCreate(
-        title="字符级语言模型训练状态空间搜索",
+        title=title,
         origin=(
             "synthetic_lm 字符级语言模型，基线 pre-norm 4 层 / lr 3e-3 / 300 步。"
             f"基线配置文件：{origin_spec}。Agent 自己编写 train.py，运行实验后将指标写入 metrics.json，"
@@ -62,7 +77,11 @@ def run_demo(port: int, trials: int, keep: bool, open_browser: bool) -> None:
     print(f"[demo] budget: {trials} trials")
     print("[demo] explore it with: mts dispatch --config config/dispatch_mock.yaml")
 
-    # Serve the WebUI (blocks; Ctrl-C to stop).
+    _serve(root, port, open_browser)
+
+
+def _serve(root: Path, port: int, open_browser: bool) -> None:
+    """Serve the WebUI (blocks; Ctrl-C to stop)."""
     app = create_app(root=root, db_path=root / "data" / "board.db")
     print(f"\n[demo] board ready at http://127.0.0.1:{port}")
     if open_browser:
