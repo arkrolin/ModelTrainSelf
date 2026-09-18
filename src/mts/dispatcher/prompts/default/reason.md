@@ -39,7 +39,7 @@
 复查要做到下面这些，并且是**读脚本实测的数字**，不是凭经验猜：
 
 1. **看训练曲线判断有没有训够**。读 `out_dir` 下的 `metrics.jsonl`（`mts train` 写的约定产物），或实验自己的日志，看 train/val loss 到最后是仍在稳定下降、已经走平、还是已经回升。只有"仍在稳定下降且未过拟合"才构成加大训练步数的证据。
-2. **看参数分布**。写脚本加载 `checkpoint_path`，逐层统计权重的 rms / std / 最大绝对值 / 接近零的比例，以及是否有 NaN/Inf。要具体指出哪些层异常，而不是只报一个全局均值。
+2. **看参数分布**。逐层统计权重的 rms / std / 最大绝对值 / 接近零的比例，以及是否有 NaN/Inf，并具体指出哪些层异常，而不是只报一个全局均值。注意：`mts train` 默认**不写 checkpoint**，所以多数实验的 `out_dir` 里没有 `.pt` 文件 —— 这种情况下参数分布直接从 `layers.jsonl`（逐层 `param_rms`）和 `diagnostics.json` 里读，或者用下面的 `inspect_distribution(kind='param')` / `inspect_layers`，不要因为找不到 checkpoint 就跳过这一步。只有当 `artifacts.checkpoint_path` 确实存在时，才需要写脚本加载它做更细的统计。
 3. **看梯度与更新量**。读 `diagnostics.json` / `layers.jsonl`（如果有），或自己加探针，判断梯度是否消失/爆炸、update_ratio 是否过小（学不动）或过大（不稳定）、有没有死神经元。
 4. **判断当前瓶颈到底是欠训、欠容量、还是过拟合/优化出了问题**。train 与 val 的差距决定该加容量还是加正则；曲线走平且梯度已经很小，说明加步数不会带来收益，问题在别处。
 
