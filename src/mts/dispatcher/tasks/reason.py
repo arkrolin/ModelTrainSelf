@@ -114,6 +114,9 @@ def run_reason_task(
                 "max_intents": str(config.tasks.reason.max_intents),
                 "goal_metric": project.project.goal_metric,
                 "goal_direction": project.project.goal_direction,
+                # reason 现在要在提方向之前先复查已有模型（读 checkpoint 统计参数
+                # 分布、跑 inspect 工具看曲线），分析脚本要有地方落。
+                "workdir": workdir,
             },
         )
 

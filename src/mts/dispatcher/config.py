@@ -39,6 +39,9 @@ DEFAULT_PROMPT_REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
         "{max_intents}",
         "{goal_metric}",
         "{goal_direction}",
+        # reason 阶段现在要求先复查已有模型（读 checkpoint、跑 inspect 工具）
+        # 再提方向，所以它也需要一个能落分析脚本的目录。
+        "{workdir}",
     ),
     "explore.md": (
         "{graph_yaml}",

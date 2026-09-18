@@ -13,8 +13,19 @@
 
 只有在你确认 Goal 已经满足之后，才返回下面这种格式：
 ```json
-{"accepted": true, "data": {"fact": {"description": "...", "metrics": {"{goal_metric}": 0.0}, "trial_id": "..."}, "complete": {"description": "..."}}}
+{"accepted": true, "data": {"fact": {"description": "...", "metrics": {"{goal_metric}": 0.0}, "trial_id": "...", "artifacts": {"checkpoint_path": "/abs/path/best.pt", "out_dir": "/abs/path/exp_001", "architecture": "...", "config_path": null}}, "complete": {"description": "..."}}}
 ```
+
+`fact.artifacts` 必须给出，它是后续 agent 复查这个模型的唯一入口（没有 `out_dir` 和 `checkpoint_path`，后面就没法读曲线、统计参数分布）。固定字段：`checkpoint_path`（checkpoint 绝对路径）、`out_dir`（训练输出根目录绝对路径）、`architecture`（架构名）、`config_path`（配置绝对路径，没有就填 `null`）；另可附 `param_count` / `train_script` / `dataset_path` / `hardware` 等。训练确实没跑起来、没有产物时才填 `null`。
+
+# 训练成本纪律
+
+这是项目的第一个实验，没有历史产物可以复查。正因为如此，本阶段的职责是**把基线和可分析的产物立起来**，而不是一上来就上大配置、长训练。
+
+- **禁止在没有任何实测依据的情况下直接铺开训练成本。** 先用最小可用规模（小模型、短训练、必要时先用数据子集）跑通端到端链路，确认指标能被真实测出来、可复现，再谈放大。第一次就开长训练，等几小时后发现数据加载或评估是错的，这些算力全白烧。
+- **跑完基线后必须复查模型，再决定下一步要不要加训练量。** 至少做到：看 train/val loss 曲线判断是仍在下降还是已经走平；写脚本加载 checkpoint，逐层统计权重 rms / std / 近零比例并检查 NaN/Inf；判断梯度是否消失或爆炸、update_ratio 是否过小或过大。这些结论要落到具体数字上，并写进 `fact.description`。
+- 只有当曲线显示"仍在稳定下降且 val 没变坏"时，加大训练步数才是有依据的；曲线已走平说明瓶颈在别处，这时加步数纯属浪费。
+- **产物要留成可被后续分析的形式。** 后续 agent 会读你留下的 `out_dir` 去复查模型，所以训练日志、逐步指标（建议写成 `metrics.jsonl`）、checkpoint 都要留在 `{workdir}` 下并给出绝对路径。如果你用项目自带的 `mts train`（`mts train --spec <spec.json> --out-dir <dir>`），它会按约定写出 `metrics.jsonl` / `layers.jsonl` / `diagnostics.json` / `summary.json`，后续 agent 可以直接用 `mts.inspect` 的只读工具（`inspect_curve` / `inspect_distribution` / `inspect_layers` / `inspect_grad_flow` / `layer_trajectory` / `compare_trials`）分析，这比自己造格式更省事。
 
 # 规则
 - 先看资源再动手。数据集路径、预训练模型压缩包等资源都写在 Origin 和 Hints 文本里，不要凭空假设路径。自己去看目录结构、看文件大小、看几条样本、确认格式与字段、确认可用的算力与环境，然后自己决定用什么方式加载和使用。

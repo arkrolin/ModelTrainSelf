@@ -188,3 +188,128 @@ def test_prompt_has_required_token_validation():
         content = load_prompt("default", name)
         for token in required_tokens:
             assert token in content, f"default/{name} missing required token {token}"
+
+
+# ---------------------------------------------------------------------------
+# Analyse-before-spend discipline
+#
+# The default prompts require an agent to re-examine the existing model before
+# it may propose or run anything that costs more compute. These are contract
+# tests: the wording may be reworded freely, but if the rule itself or the
+# plumbing it depends on disappears, the agents silently go back to blindly
+# scaling up training, which is exactly what these prompts exist to prevent.
+# ---------------------------------------------------------------------------
+
+# Field names the prompts tell the agent to read out of each inspect tool's
+# result. Kept in sync with mts.inspect by test_inspect_tool_fields_exist.
+INSPECT_FIELDS_CITED = {
+    "inspect_curve": ("shape", "val_shape", "clipped_fraction"),
+    "inspect_distribution": ("characterization", "stats"),
+    "inspect_layers": ("outliers", "summary"),
+    "layer_trajectory": ("trends",),
+    "inspect_grad_flow": ("assessment", "bottom_top_ratio", "per_layer_decay_factor"),
+    "compare_trials": ("verdict_change", "spec_delta", "metric_delta"),
+}
+
+
+@pytest.mark.parametrize("name", ["reason.md", "explore.md"])
+def test_prompt_requires_analysis_before_scaling_cost(name):
+    """The two prompts that decide/spend compute must carry the rule."""
+    content = load_prompt("default", name)
+    assert "强制前置步骤" in content, f"{name} lost the mandatory pre-analysis section"
+    # The artifacts field is the agent's only route to a past model.
+    assert "artifacts" in content
+    assert "checkpoint_path" in content
+    assert "out_dir" in content
+    # The three things the user asked to be analysed.
+    assert "参数分布" in content
+    assert "metrics.jsonl" in content or "训练曲线" in content
+    assert "梯度" in content
+
+
+@pytest.mark.parametrize("name", ["reason.md", "explore.md"])
+def test_prompt_forbids_blind_cost_increase(name):
+    """Scaling compute without evidence must be explicitly forbidden."""
+    content = load_prompt("default", name)
+    assert "禁止" in content, f"{name} no longer forbids anything"
+    # Naming the specific levers matters: a generic "be careful" does not stop
+    # an agent from proposing "train for 10x more steps".
+    assert "训练步数" in content
+    assert "batch" in content.lower()
+
+
+@pytest.mark.parametrize("name", ["reason.md", "explore.md"])
+def test_prompt_cites_inspect_tools_with_readable_fields(name):
+    """Every inspect tool the prompt names also says which field to read.
+
+    Without the field name an agent gets a few thousand downsampled curve
+    points back and no indication that `shape` already holds the verdict.
+    """
+    content = load_prompt("default", name)
+    for tool, fields in INSPECT_FIELDS_CITED.items():
+        assert tool in content, f"{name} stopped mentioning {tool}"
+        assert any(f in content for f in fields), (
+            f"{name} names {tool} but none of its verdict fields {fields}"
+        )
+
+
+def test_inspect_tool_fields_exist():
+    """Fields the prompts tell agents to read are really returned.
+
+    Guards against the prompts pointing at a key that was renamed in
+    mts.inspect — the agent would just see `None` and lose the evidence it is
+    required to base its decision on.
+    """
+    from mts.inspect import TOOLS
+
+    assert set(INSPECT_FIELDS_CITED) <= set(TOOLS), (
+        f"prompts cite unknown tools: {set(INSPECT_FIELDS_CITED) - set(TOOLS)}"
+    )
+
+
+def test_reason_prompt_has_workdir_for_analysis_scripts():
+    """reason.md needs a workdir: it now writes analysis scripts.
+
+    The token must be both declared as required and present in the template,
+    otherwise the rendered prompt ships a literal `{workdir}` to the agent.
+    """
+    assert "{workdir}" in DEFAULT_PROMPT_REQUIRED_TOKENS["reason.md"]
+    assert "{workdir}" in load_prompt("default", "reason.md")
+
+
+def test_reason_task_supplies_workdir():
+    """The reason task actually fills {workdir}.
+
+    Declaring the token is not enough — tasks/reason.py has to pass it, or
+    validate_prompt_resources passes while the agent still sees the literal.
+    """
+    import inspect as _inspect
+
+    from mts.dispatcher.tasks import reason as reason_task
+
+    src = _inspect.getsource(reason_task)
+    assert '"workdir"' in src, "reason.py no longer passes workdir to render_prompt"
+
+
+@pytest.mark.parametrize("name", ["bootstrap.md", "bootstrap_conclude.md"])
+def test_bootstrap_prompts_request_artifacts(name):
+    """Bootstrap must hand back artifacts; every later analysis starts there."""
+    content = load_prompt("default", name)
+    assert "artifacts" in content
+    assert "out_dir" in content
+    assert "checkpoint_path" in content
+
+
+def test_conclude_prompts_do_not_ask_for_more_commands():
+    """Conclude is a hard stop — it must not order fresh analysis runs.
+
+    The analysis requirement belongs to the execute phases. Asking for it here
+    would fight the "stop immediately, run nothing" contract that keeps a
+    timed-out task from hanging forever.
+    """
+    for name in ("explore_conclude.md", "bootstrap_conclude.md"):
+        content = load_prompt("default", name)
+        assert "不要再运行任何命令" in content or "不需要再运行任何命令" in content
+        assert "强制前置步骤" not in content, (
+            f"{name} must not demand pre-analysis; it is a stop phase"
+        )

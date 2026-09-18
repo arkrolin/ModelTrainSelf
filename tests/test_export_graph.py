@@ -244,3 +244,74 @@ def test_export_content_type_is_plain_text(client, project):
     response = client.get(f"/api/projects/{project}/export", params={"format": "yaml"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
+
+
+def test_export_facts_include_artifacts_when_present(client, project):
+    """Artifacts reach the graph snapshot agents read.
+
+    The prompts require an agent to re-examine the existing model (read the
+    loss curve, stat the checkpoint's parameter distribution) before it may
+    propose spending more compute. The snapshot is its only graph input, so
+    dropping `artifacts` here would leave it with no way to find the model —
+    and the "analyse first, scale later" rule unenforceable.
+    """
+    response = client.post(f"/api/projects/{project}/intents", json={
+        "from": ["origin"],
+        "description": "Baseline",
+        "creator": "human",
+    })
+    intent_id = response.json()["id"]
+    client.post(f"/api/projects/{project}/intents/{intent_id}/claim",
+                json={"worker": "w1"})
+    response = client.post(f"/api/projects/{project}/intents/{intent_id}/conclude", json={
+        "worker": "w1",
+        "description": "Baseline trained",
+        "metrics": {"val_acc": 0.71},
+        "trial_id": "t001",
+        "artifacts": {
+            "checkpoint_path": "/runs/exp1/best.pt",
+            "out_dir": "/runs/exp1",
+            "architecture": "CharTransformer",
+            "param_count": 1976832,
+        },
+    })
+    fact_id = response.json()["fact"]["id"]
+
+    response = client.get(f"/api/projects/{project}/export", params={"format": "yaml"})
+    data = yaml.safe_load(response.text)
+
+    fact = next(f for f in data["facts"] if f["id"] == fact_id)
+    assert fact["artifacts"]["out_dir"] == "/runs/exp1"
+    assert fact["artifacts"]["checkpoint_path"] == "/runs/exp1/best.pt"
+    assert fact["artifacts"]["architecture"] == "CharTransformer"
+    assert fact["artifacts"]["param_count"] == 1976832
+
+
+def test_export_omits_artifacts_key_when_absent(client, project):
+    """A fact without artifacts carries no `artifacts` key at all.
+
+    Emitting `artifacts: null` on every fact would just add noise to a snapshot
+    that already goes into an agent's context window.
+    """
+    response = client.post(f"/api/projects/{project}/intents", json={
+        "from": ["origin"],
+        "description": "No-artifact conclusion",
+        "creator": "human",
+    })
+    intent_id = response.json()["id"]
+    client.post(f"/api/projects/{project}/intents/{intent_id}/claim",
+                json={"worker": "w1"})
+    response = client.post(f"/api/projects/{project}/intents/{intent_id}/conclude", json={
+        "worker": "w1",
+        "description": "Dead end, no artifacts",
+        "metrics": {"val_acc": 0.4},
+    })
+    fact_id = response.json()["fact"]["id"]
+
+    response = client.get(f"/api/projects/{project}/export", params={"format": "yaml"})
+    data = yaml.safe_load(response.text)
+
+    fact = next(f for f in data["facts"] if f["id"] == fact_id)
+    assert "artifacts" not in fact
+    # The origin/goal seed facts have no artifacts either.
+    assert "artifacts" not in next(f for f in data["facts"] if f["id"] == "origin")

@@ -18,8 +18,44 @@
 {"accepted": true, "data": {"description": "...", "metrics": {"{goal_metric}": 0.0, "train_loss": 0.0}, "trial_id": "...", "artifacts": {"checkpoint_path": "/path/to/best.pt", "out_dir": "/path/to/exp", "architecture": "ResNet-50", "config_path": "/path/to/config.yaml"}}}
 ```
 
+# 强制前置步骤：先复查已有模型，再决定怎么跑
+
+在启动**任何**训练之前，你必须先复查已有实验的模型与训练情况，并写下理论分析。图谱 facts 的 `artifacts` 字段里有历史实验的产物路径（`out_dir`、`checkpoint_path`、`architecture`、`param_count` 等），那是你的入口。分析脚本写在 `{workdir}` 里，产物留下来供后续 agent 审计。
+
+**在没有做过任何分析之前，禁止盲目增大训练成本。** 具体指：加大训练步数/轮数、加宽加深模型、增大 batch、延长训练时间、换更大的预训练模型。这些都要先有数据支撑才能做。
+
+复查至少要覆盖这几项，结论必须落到**脚本实测出来的具体数字**上，不能凭经验猜：
+
+1. **训练曲线**：读历史实验 `out_dir` 下的 `metrics.jsonl` 或训练日志，判断 train/val loss 到最后是仍在稳定下降、已经走平、还是已经回升。**只有"仍在稳定下降且 val 没有变坏"才构成加大训练步数的理由**；已经走平还加步数，就是纯浪费算力。
+2. **参数分布**：写脚本加载 `checkpoint_path`，逐层统计权重 rms / std / 最大绝对值 / 近零比例，并检查 NaN/Inf。指出具体哪些层异常，而不是只给一个全局数。
+3. **梯度与更新量**：读 `diagnostics.json` / `layers.jsonl`，或自己加探针，判断梯度是否消失或爆炸、update_ratio 是否过小（学不动）或过大（不稳定）、是否有死神经元。
+4. **瓶颈归因**：明确当前是欠训、欠容量、过拟合，还是优化/数据/评估出了问题。train 与 val 的差距决定该加容量还是加正则。曲线已走平且梯度很小，说明问题不在训练量上，加步数不会有收益。
+
+对于用 `mts train` 跑出来的实验，有一组现成的只读分析工具（读 `out_dir` 下的 `layers.jsonl` / `diagnostics.json` / `metrics.jsonl` / `summary.json`，不需要 GPU，不改动任何状态）：
+
+```
+python -c "import json;from mts.inspect import run_tool;print(json.dumps(run_tool('inspect_curve','<out_dir>'),ensure_ascii=False,indent=2))"
+```
+
+返回的曲线点数组很长，**结论在下面点出的字段上**，先看这些字段再决定要不要细看原始数据：
+
+- `inspect_curve`(downsample=40)：看 `shape` 和 `val_shape`，它直接给出 `plateaued near X` / 仍在下降之类的判断；`clipped_fraction` 反映梯度裁剪是否过于频繁。**判断能不能加训练步数就看这个。**
+- `inspect_distribution`(kind='param' 或 'grad')：看 `characterization`（会直接点出 `degenerate distribution` 这类问题）和 `stats`（`max_abs` / `max_rms` / `final_update_ratio`）。
+- `inspect_layers`(step=可选)：看 `outliers`（异常层，空列表=无明显异常）和 `summary`（每字段跨层的 min/max/mean/spread）。
+- `layer_trajectory`(layer=可选, field='grad_rms')：看 `trends`，每层一句话，如 `falling to 0.28x` / `roughly flat`。
+- `inspect_grad_flow`()：看 `assessment`（如 `gradient reaches the whole stack`）、`bottom_top_ratio`、`per_layer_decay_factor`。
+- `compare_trials`(out_dir_b=另一实验的 out_dir)：看 `verdict_change`（如 `underfitting -> vanishing`）、`spec_delta`（改了什么）、`metric_delta`（因此变好还是变坏）。
+
+如果这是项目里第一个实验、没有任何历史产物可分析，就在 `description` 里明确写出"无历史产物，本次为首个基线"，然后按最小可用规模起步 —— 而不是直接上大配置长训练。
+
+如果历史 `artifacts` 缺失或分析脚本跑不通，先如实记录这个情况，再决定是补齐产物还是换方向，不要假装分析过。
+
+分析得出的结论必须写进最终 `description`：你测到了什么、由此判断瓶颈在哪、本次的训练规模是根据哪条证据定的。
+
 # 规则
 - 先看资源再动手。数据集路径、预训练模型压缩包等资源都写在图谱的 origin 和 hints 文本里，不要凭空假设路径。自己去看目录结构、看文件大小、看几条样本、确认格式与字段，然后自己决定用什么方式加载。
+- **先分析，再花算力。** 每一次提高训练成本的决定都要有前面复查得出的证据支撑，并在 `description` 里写明是哪一条。先用小规模/短训练验证想法是否成立，确认方向对了再放大规模。
+- 优先做不靠加大算力就能验证的检查：学习率与调度是否合适、数据质量与划分是否有问题、评估指标是否定义正确、归一化与初始化是否配错。这些通常比堆训练量更快定位问题，也更省钱。
 - 在 `{workdir}` 里完成全部工作：训练脚本、配置、训练日志、`metrics.json`、以及必要的产物都留在这里，方便后续 agent 审计与复现。不要污染工作目录之外的地方。
 - 必须真的跑训练并读取真实输出的指标。**绝对不要编造、估计或"预期"任何指标数值。** `metrics` 里的每个数字都必须来自你真实运行得到的输出。
 - `metrics` 用真实的指标名做 key，必须包含目标指标 `{goal_metric}`；其他有诊断价值的指标（train/val loss、其他评估指标、训练步数、耗时等）也一并给出。数值必须是数字，不要写成字符串。

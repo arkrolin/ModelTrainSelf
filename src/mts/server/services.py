@@ -596,15 +596,23 @@ class Service:
                 for h in hints
             ]
 
-        data["facts"] = [
-            {
+        fact_list: list[dict[str, Any]] = []
+        for f in facts:
+            entry = {
                 "id": f["id"],
                 "description": f["description"],
                 "metrics": f.get("metrics", {}),
                 "trial_id": f.get("trial_id"),
             }
-            for f in facts
-        ]
+            # artifacts 必须进快照。agent 被要求在提出新方向之前先复查已有模型
+            # （读 checkpoint 看参数分布、用 inspect 工具看梯度/曲线），而它唯一
+            # 的图谱输入就是这份 YAML —— 不带 out_dir/checkpoint_path，它就不知道
+            # 上一轮的模型和训练产物落在哪，"先分析再加训练量"这条要求也就无从执行。
+            # 只在有产物时带上，避免给每个 fact 挂一串 null。
+            if f.get("artifacts"):
+                entry["artifacts"] = f["artifacts"]
+            fact_list.append(entry)
+        data["facts"] = fact_list
 
         intent_list = []
         for i in intents:

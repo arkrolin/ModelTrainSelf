@@ -15,11 +15,12 @@
 
 正常返回示例：
 ```json
-{"accepted": true, "data": {"fact": {"description": "...", "metrics": {"{goal_metric}": 0.0}, "trial_id": "..."}}}
+{"accepted": true, "data": {"fact": {"description": "...", "metrics": {"{goal_metric}": 0.0}, "trial_id": "...", "artifacts": {"checkpoint_path": "/abs/path/best.pt", "out_dir": "/abs/path/exp_001", "architecture": "...", "config_path": null}}}}
 ```
 
 ## 规则
 - 立即停止所有工作，现在就产出 JSON。不要继续任务，不要开始任何新的事情。
+- **如果训练已经跑过并留下了产物，必须给出 `fact.artifacts`**：`checkpoint_path`（绝对路径）、`out_dir`（训练输出根目录绝对路径）、`architecture`、`config_path`（可为 `null`），另可附 `param_count` / `train_script` 等。后续 agent 复查这个模型（读曲线、统计参数分布、看梯度）全靠这两个路径，漏了它下一轮就只能重新盲跑。训练没跑起来、确实没有产物时才填 `null`。这里只是如实填写已经存在的路径，不需要再运行任何命令。
 - 不要再运行任何命令、不要再做任何工具调用、不要再检查任何东西、不要等待任何未完成的训练或命令、不要试图获取任何额外信息。如果有训练还在跑，不要等它跑完，直接汇报已经测到的部分。
 - 只基于本 conclude 提示之前已经确认的信息作答。还没确认的东西，不要等它，也不要写进来。
 - `metrics` 只填你**已经真实测到**的数值，key 用真实指标名（目标指标是 `{goal_metric}`）。绝对不要编造、补齐或估计任何数字。如果什么都还没测到，让 `metrics` 为空对象 `{}`，并在 `description` 里如实说明进展到了哪一步、卡在哪里。
