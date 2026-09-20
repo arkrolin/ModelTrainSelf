@@ -27,7 +27,7 @@
 复查至少要覆盖这几项，结论必须落到**脚本实测出来的具体数字**上，不能凭经验猜：
 
 1. **训练曲线**：读历史实验 `out_dir` 下的 `metrics.jsonl` 或训练日志，判断 train/val loss 到最后是仍在稳定下降、已经走平、还是已经回升。**只有"仍在稳定下降且 val 没有变坏"才构成加大训练步数的理由**；已经走平还加步数，就是纯浪费算力。
-2. **参数分布**：写脚本加载 `checkpoint_path`，逐层统计权重 rms / std / 最大绝对值 / 近零比例，并检查 NaN/Inf。指出具体哪些层异常，而不是只给一个全局数。
+2. **参数分布**：逐层统计权重 rms / std / 最大绝对值 / 近零比例，并检查 NaN/Inf，指出具体哪些层异常，而不是只给一个全局数。注意：`mts train` 默认**不写 checkpoint**，所以历史 `out_dir` 里通常没有 `.pt` 文件 —— 这种情况从 `layers.jsonl`（逐层 `param_rms`）和 `diagnostics.json` 里读，或直接用下面的 `inspect_distribution(kind='param')` / `inspect_layers`，不要因为没有 checkpoint 就跳过这一步。只有 `artifacts.checkpoint_path` 确实存在时，才写脚本加载它做更细的统计。你自己这次训练如果需要事后复查参数，记得在训练里显式打开 checkpoint 保存。
 3. **梯度与更新量**：读 `diagnostics.json` / `layers.jsonl`，或自己加探针，判断梯度是否消失或爆炸、update_ratio 是否过小（学不动）或过大（不稳定）、是否有死神经元。
 4. **瓶颈归因**：明确当前是欠训、欠容量、过拟合，还是优化/数据/评估出了问题。train 与 val 的差距决定该加容量还是加正则。曲线已走平且梯度很小，说明问题不在训练量上，加步数不会有收益。
 

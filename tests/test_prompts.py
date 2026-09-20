@@ -300,6 +300,41 @@ def test_bootstrap_prompts_request_artifacts(name):
     assert "checkpoint_path" in content
 
 
+@pytest.mark.parametrize("name", ["reason.md", "explore.md"])
+def test_prompt_gives_param_distribution_fallback_without_checkpoint(name):
+    """The parameter-distribution step must work with no .pt on disk.
+
+    `mts train` keeps checkpointing opt-in, so a plain trial dir holds no
+    checkpoint at all. If the prompt only said "load checkpoint_path", the
+    agent would find nothing and skip the analysis it is required to do —
+    which is exactly the blind-scaling case the rule exists to prevent.
+    The substitutes are per-layer stats that are always written.
+    """
+    content = load_prompt("default", name)
+    assert "layers.jsonl" in content, f"{name} lost the checkpoint-free source"
+    assert "param_rms" in content
+    assert "inspect_distribution(kind='param')" in content
+    assert "跳过" in content, f"{name} must say not to skip when no checkpoint exists"
+
+
+def test_train_really_defaults_to_no_checkpoint():
+    """Pins the fact the prompts assert about `mts train`.
+
+    The prompts tell agents that a trial dir normally has no checkpoint. If
+    checkpointing ever becomes default-on, that sentence turns into a lie and
+    the prompts need rewording — fail here so it is noticed.
+    """
+    import inspect as _inspect
+
+    from mts.trainer.runner import run_trial
+
+    default = _inspect.signature(run_trial).parameters["checkpoint_every"].default
+    assert default is None, (
+        "run_trial now checkpoints by default; the no-checkpoint fallback "
+        "wording in reason.md / explore.md is stale"
+    )
+
+
 def test_conclude_prompts_do_not_ask_for_more_commands():
     """Conclude is a hard stop — it must not order fresh analysis runs.
 
